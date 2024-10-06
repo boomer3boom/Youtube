@@ -1,0 +1,14 @@
+The electricity grid and system is a very complex place. In this problem, consider a simplified 
+system of a energy company needing to provide energy to each suburbs. 
+
+There are 3 different energy generator with the following details:
+Hydropump:      Capable of generating 2000 to 8000kW per hour. $5 operating cost applies for
+                each kw of electricity generated.
+Wind Turbine:   Capable of generating 500 to 3000KW per hour. $0.1 operating cost applies for 
+                each kw of electricity generated.
+Fossil Fuels:   Capable of generating 300 to 5000kW per hour. $10 operating cost applies for 
+                each kw of electricity generated.
+
+Additionally, when the electricity travels through the grid, each edge approximately loses 0.2%
+of the input load per km. Finally for every kW sold, the company earns $13 of profit. Maximise
+the profit while ensuring all suburb recieves the required amount of energy. 

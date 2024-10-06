@@ -1,13 +1,21 @@
 import numpy as np
 import pandas as pd
 
-def revised_simplex(c, A, b):
+def revised_simplex(c, A, b, init_basis=None):
     m, n = A.shape
+
+    if init_basis is None:
+        basis = list(range(n - m, n))  # Initial basic variables
+        non_basis = list(range(n - m))  # Initial non-basic variables
+    else:
+        basis = [i for i, val in enumerate(init_basis) if val == 1]
+        non_basis = [i for i, val in enumerate(init_basis) if val == 0]
 
     basis = list(range(n - m, n)) 
     non_basis = list(range(n-m))
 
     B = A[:, basis]
+    print(B)
     B_inv = np.linalg.inv(B)
     x_B = np.dot(B_inv, b)
     count = 0
@@ -63,17 +71,17 @@ def revised_simplex(c, A, b):
         x_B = np.dot(B_inv, b)
         count += 1
 
-# Coefficients of the objective function (c)
-c = np.array([20, 30, 50, 0, 0,0])
+# # Coefficients of the objective function (c)
+# c = np.array([20, 30, 50, 0, 0,0])
 
-# Coefficients matrix for constraints (A)
-A = np.array([
-    [5, 8, 15, 1, 0, 0],
-    [3, 4, 8, 0, 1, 0],
-    [1, 2, 4, 0, 0, 1]
-])
+# # Coefficients matrix for constraints (A)
+# A = np.array([
+#     [5, 8, 15, 1, 0, 0],
+#     [3, 4, 8, 0, 1, 0],
+#     [1, 2, 4, 0, 0, 1]
+# ])
 
-# Right-hand side of constraints (b)
-b = np.array([300, 200, 30])
+# # Right-hand side of constraints (b)
+# b = np.array([300, 200, 30])
 
-print(revised_simplex(c, A, b))
+# print(revised_simplex(c, A, b))
