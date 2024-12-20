@@ -68,11 +68,13 @@ variance_by_band = {
 }
 
 # Example of how to sample for the S&P 500 simulation:
-num_scenarios = 50
+num_scenarios = 500
 num_weeks = 52
-initial_price = 6050
-target_price = 6600  # Set your target price
-alpha_max = 0.2
+#initial_price = 6050
+initial_price = 3260
+target_price = 3750
+#target_price = 6600  # Set your target price
+alpha_max = 0.1
 simulated_prices = np.zeros((num_scenarios, num_weeks + 1))
 
 for s in range(num_scenarios):
@@ -113,9 +115,9 @@ for s in range(num_scenarios):
             prices.append(next_price)
 
             # Check if the price is out of bounds
-            if next_price < 5000 or next_price > 7500:
-                valid_scenario = False  # Invalidate the scenario
-                break  # Exit the loop and restart the scenario
+            if next_price < 2000 or next_price > 4500:
+               valid_scenario = False  # Invalidate the scenario
+               break  # Exit the loop and restart the scenario
 
         if valid_scenario:  # Only save the scenario if it's valid
             simulated_prices[s, :] = prices
