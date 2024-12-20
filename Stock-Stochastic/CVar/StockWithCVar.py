@@ -1,5 +1,4 @@
 # Suppose a company needs to invest in talents (ie employees) and they preform differently everyday ish..
-
 import gurobipy as gp
 import numpy
 import csv
@@ -11,7 +10,7 @@ import yfinance as yf
 # List of stocks/ETFs
 tickers = ["WEB.AX", "BOQ.AX", "CBA.AX", "NAB.AX", "WBC.AX", "ORCL", "SEMI.AX", "MSFT", "AMZN", "TEAM", "GOOG", "META", "AAPL", "AMD", "INTC", "TSMC34.SA", "DTL.AX", "NDQ.AX", "IBM", "WDAY", "HACK.AX", "ADBE", "RMD.AX", "EDOC", "ACDC.AX", "SAP", "FLT.AX", "ORG.AX", "SNOW", "IOZ.AX", "CRED.AX", "SPY", "BTC-USD", "ETHI.AX", "SYI.AX", "IEM.AX", "QTUM", "ITA"]  # Replace with your stock/ETF list
 etfs = ["NDQ.AX", "HACK.AX", "EDOC", "ACDC.AX", "IOZ.AX", "CRED.AX", "SPY", "SYI.AX", "IEM.AX", "QTUM", "ITA", "SEMI.AX"]
-must_have = ["NDQ.AX", "HACK.AX", "SPY", "SYI.AX", "QTUM", "IEM.AX"]
+must_have = ["SEMI.AX", "NDQ.AX", "HACK.AX", "SPY", "SYI.AX", "QTUM", "IEM.AX"]
 tickers = sorted(tickers)
 
 # Define the time range
@@ -45,7 +44,7 @@ m = gp.Model('SAA CVar')
 alpha = 0.05
 Lambda = 0.80
 
-S = range(100000)
+S = range(1000000)
 
 RS = numpy.random.multivariate_normal(R, W, len(S)).tolist()
 
@@ -58,10 +57,10 @@ CVar = m.addVar()
 
 m.addConstr(gp.quicksum(X[i] for i in N)==1)
 
-m.addConstr(gp.quicksum(X[i] for i in N if tickers[i] not in etfs)<=0.4)
+m.addConstr(gp.quicksum(X[i] for i in N if tickers[i] not in etfs)<=0.3)
 
 NotTooMuch = {
-    i: m.addConstr(X[i] <= 0.4)
+    i: m.addConstr(X[i] <= 0.2)
     for i in N
 }
 
