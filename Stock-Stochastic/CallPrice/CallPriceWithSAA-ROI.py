@@ -105,10 +105,6 @@ InitZ = {
     s: master.addConstr(Z[s] <= Prices[s][51] * ratio[s])
     for s in S
 }
-# InitZ = {
-#     s: master.addConstr(Z[s] <= 2)
-#     for s in S
-# }
 
 SpendTooMuch = 0
 SpendTooLittle = 0
