@@ -1,9 +1,9 @@
 import yfinance as yf
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
-import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.pyplot as plt
+from scipy.stats import norm
 
 # Fetch historical data
 ticker = '^GSPC'
@@ -11,8 +11,14 @@ start_date = '1980-01-01'
 end_date = '2024-12-01'
 data = yf.download(ticker, start=start_date, end=end_date, progress=False)
 
+# Print the columns to check the available data
+print(data.columns)
+
+# Use the correct column name for adjusted close prices
+adj_close_col = ('Adj Close', ticker) if ('Adj Close', ticker) in data.columns else ('Close', ticker)
+
 # Resample to weekly data and calculate weekly log returns
-data_weekly = data['Adj Close'].resample('W').last()
+data_weekly = data[adj_close_col].resample('W').last()
 weekly_returns = np.log(data_weekly / data_weekly.shift(1)).dropna()
 
 # Compute rolling weekly volatility (standard deviation) over a short window
@@ -68,13 +74,13 @@ variance_by_band = {
 }
 
 # Example of how to sample for the S&P 500 simulation:
-num_scenarios = 500
+num_scenarios = 100
 num_weeks = 52
 #initial_price = 6050
 initial_price = 3260
 target_price = 3750
 #target_price = 6600  # Set your target price
-alpha_max = 0.1
+alpha_max = 0.0
 simulated_prices = np.zeros((num_scenarios, num_weeks + 1))
 
 for s in range(num_scenarios):
@@ -129,8 +135,8 @@ for s in range(num_scenarios):
 plt.axhline(y=target_price, color='r', linestyle='--', label="Target Price")
 plt.xlabel("Week")
 plt.ylabel("Price")
-plt.title("Simulated S&P 500 Scenarios")
+plt.title("Simulation")
 plt.show()
 
 # Save the simulated prices to a .npy file
-np.save('simulated_prices.npy', simulated_prices)
+#np.save('simulated_prices.npy', simulated_prices)

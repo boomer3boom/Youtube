@@ -86,6 +86,7 @@ master.setObjective(
     gp.quicksum(Z[s] for s in S) / len(S),
     gp.GRB.MAXIMIZE
 )
+
 OneAPerB = {
     p: master.addConstr(gp.quicksum(BA[p,a] for a in A) == 1)
     for p in P

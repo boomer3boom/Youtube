@@ -2,38 +2,12 @@ import gurobipy as gp
 import numpy as np
 import math
 
-# Do it for this first and get a couple of choices. Then test this on 10 seperate new problems? 
-# Can we do something about this with benders/callback?
-
 # Sets
 W = range(52) # 52 weeks
 S = range(500) 
 H = range(4) # 1st quater, 2nd 3rd and 4th
 #P = range(5000, 10000)
 A = range(50)
-
-# Data
-def brokerage(x):
-    if x <= 100000:
-        return 500
-    elif x > 100000 and x <= 300000:
-        return 1000
-    elif x > 300000 and x <= 1000000:
-        return 2000
-    elif x > 1000000 and x <= 2500000:
-        return 3000
-    else:
-        return 0.12 * x
-
-# def splits(h):
-#     if h == 0:
-#         return range(0, 13)
-#     elif h == 1:
-#         return range(13, 26)
-#     elif h == 2:
-#         return range(26, 39)
-#     elif h == 3:
-#         return range(39, 52)
 
 def f(Bought_Amount, Price):
 
@@ -51,7 +25,6 @@ def f(Bought_Amount, Price):
             last_price_range=rounded_price
             stocks_bought += Bought_Amount[rounded_price]
             total_spending += Bought_Amount[rounded_price] * p_week 
-            #total_spending += Bought_Amount[rounded_price] * p_week + brokerage(Bought_Amount[rounded_price] * p_week)
     
     invalids = []
     # If the ending price for this scenario leans toward a cheaper price, then I want to buy more stock since i trust the s and p 500?
@@ -101,16 +74,6 @@ OneAPerB = {
     for p in P
 }
 
-# AssetCap = {
-#     s: master.addConstr(Asset[s] <= (Capital/min(Prices[s])) * Prices[s][51])
-#     for s in S
-# }
-
-# MinimumCost = {
-#     s: master.addConstr(Cost[s] >= min(Prices[s]*30))
-#     for s in S
-# }
-
 # Initial Z estimation constraint: Prices[s][51]*no_of_stock/cost[s]
 InitZ = {
     s: master.addConstr(Z[s] <= Asset[s]-Cost[s])
@@ -136,13 +99,11 @@ def Callback(model,where):
             if p not in Dict_BA:
                 Dict_BA[p] = 0
 
-        #function_result = {}
-        #Invalidated = False
         for s in S:
             result = f(Dict_BA, Prices[s])
             if 'invalids' in result:
                 model.cbLazy(gp.quicksum(BA[p,a] for (p,a) in Current) <= len(Current) - 1)
-                #Invalidated = True
+
                 if "SpendTooMuch" in result['invalids']:
                     SpendTooMuch += 1
                     # Feasibility Cut: Any amount ad that is more than the current solution must be cut off.
@@ -153,17 +114,9 @@ def Callback(model,where):
                     # Feasibility Cut: Any amount ad that is less than the current solution must be cut off.
                     model.cbLazy(gp.quicksum(BA[p,ad] for (p,a) in Current for ad in A if a > ad) <= len(Current) - 1)
             else:
-                # Is there any way to consider risk?
-                #model.cbLazy(Z[s] <= Prices[s][51] * ratio[s])
                 model.cbLazy(Z[s] <= result['ROI'] + (500000 * gp.quicksum(1-BA[p, a] for (p,a) in Current)))
             
-            # # Update the true value of cost and num_stocks
-            # model.cbLazy(Asset[s] <= result['assets'] + (500000 * gp.quicksum(1-BA[p, a] for (p,a) in Current)))
-            # model.cbLazy(Cost[s] >= result['cost'] - (500000 * gp.quicksum(1-BA[p, a] for (p,a) in Current)))
-                
-      
 # Solve the Master Problem
-
 master.setParam('LazyConstraints',1)
 master.setParam('MIPFocus', 1)
 master.setParam('Heuristics', 0.9)
