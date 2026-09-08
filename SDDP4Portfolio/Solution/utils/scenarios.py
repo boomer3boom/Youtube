@@ -60,9 +60,34 @@ def buy_and_hold_benchmark(returns, T, rng, etf_index, c0, n_forward=200):
     """Naive comparison: hold a single ETF (by index into the universe)
     untouched over the horizon, simulated with the same bootstrap used by
     the SDDP solver's scenario generation.
+
+    Used for tail statistics (e.g. worst-5%), which have no simple closed
+    form under bootstrap resampling. For the mean, prefer
+    analytic_buy_and_hold_mean() -- unlike the SDDP policy (whose mean is
+    unavoidably noisy, since it depends on solved decisions with no closed
+    form), a buy-and-hold position has an exact expected value, so there's
+    no reason to leave simulation noise in it.
     """
     outcomes = []
     for _ in range(n_forward):
         phi_path = simulate_phi_path(returns, T, rng)
         outcomes.append(c0 * float(np.prod(phi_path[:, etf_index])))
     return outcomes
+
+
+def analytic_buy_and_hold_mean(returns, T, etf_index, c0):
+    """Exact expected terminal wealth for a buy-and-hold position in one
+    ETF, under the same i.i.d.-bootstrap-with-replacement assumption used
+    for scenario generation elsewhere: each period's growth factor is an
+    independent draw from the same historical pool, so
+
+        E[W_T] = c0 * mean(phi)^T
+
+    using the *arithmetic* mean of the historical per-period growth
+    factors phi = exp(r). That has to be mean(exp(r)), not exp(mean(r)) --
+    those differ by Jensen's inequality (exp is convex), and only the
+    former equals what bootstrap sampling actually averages to.
+    """
+    phi = np.exp(returns[:, etf_index])
+    mean_phi = float(np.mean(phi))
+    return c0 * mean_phi ** T

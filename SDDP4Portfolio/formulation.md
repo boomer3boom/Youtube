@@ -32,6 +32,14 @@ for a few reasons:
 - **Valuation matters, not just price.** Some ETFs are cheap or expensive
   relative to their earnings at a point in time, and the investor wants to
   avoid buying into funds sitting outside an acceptable valuation band.
+- **The same pre-tax return isn't worth the same to every ETF.** The
+  investor is an Australian resident taxpayer, so dividends from
+  Australian companies carry a franking credit (a refund of the 30%
+  company tax already paid) that dividends from an ETF's foreign holdings
+  don't. An ETF whose look-through exposure is more Australian is worth
+  more, after tax, than an equally-performing ETF exposed elsewhere —
+  purely because of who is holding it, not because of anything about the
+  fund itself.
 
 The problem, then, is to decide a sequence of buy/sell/hold actions and
 resulting holding percentages for each ETF over time, so that the
@@ -80,6 +88,8 @@ sector, and valuation limits at every review point.
 | $\overline{w}$ | Maximum permitted holding weight for any single ETF |
 | $\overline{\theta}^{G}_{g}$ | Maximum permitted portfolio exposure to region $g$ |
 | $\overline{\theta}^{S}_{s}$ | Maximum permitted portfolio exposure to sector/theme $s$ |
+| $\gamma^{AU}$ | Average per-period franking credit yield on Australian equities (e.g. dividend yield $\times$ franking level $\times \frac{t_c}{1-t_c}$ at the $t_c=30\%$ company tax rate) |
+| $\gamma_{e} = L^{G}_{e,\text{Australia}} \cdot \gamma^{AU}$ | Effective franking credit yield of ETF $e$, derived from how much of its look-through exposure is Australian |
 
 ## Parameters
 
@@ -178,11 +188,20 @@ $$
 h_{e,t} = \phi_{e,t}\, h_{e,t-1} + b_{e,t} - u_{e,t}
 $$
 
-**Cash balance** (buying costs $\kappa^{buy}$ extra, selling nets $\kappa^{sell}$ less):
+**Cash balance** (buying costs $\kappa^{buy}$ extra, selling nets $\kappa^{sell}$ less,
+and last period's holdings pay out a franking credit $\gamma_e$ in cash):
 
 $$
-C_t = C_{t-1} - \sum_{e} b_{e,t}\left(1+\kappa^{buy}\right) + \sum_{e} u_{e,t}\left(1-\kappa^{sell}\right)
+C_t = C_{t-1} + \sum_{e} h_{e,t-1}\,\gamma_e - \sum_{e} b_{e,t}\left(1+\kappa^{buy}\right) + \sum_{e} u_{e,t}\left(1-\kappa^{sell}\right)
 $$
+
+The franking credit is earned on what was *held over* the period (hence
+$h_{e,t-1}$, not $h_{e,t}$), and is separate from — additive to — the
+ETF's own price return: it doesn't change $\phi_{e,t}$ or the holdings
+balance above, only how much cash comes back each period. $\gamma_e$ is
+zero for any ETF with no Australian look-through exposure, so this term
+only ever benefits IOZ.ASX and, to a lesser extent, DHHF.ASX in this
+project's universe.
 
 **Single-holding cap:**
 

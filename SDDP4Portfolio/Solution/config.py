@@ -27,8 +27,15 @@ class ModelConfig:
     pe_lower: float = 0.0           # readme.md: PE-underline
     pe_upper: float = 45.0          # readme.md: PE-overline
     alpha: float = 0.95             # readme.md: alpha, CVaR confidence level
-    lambda_: float = 0.5            # readme.md: lambda, risk-aversion weight
+    lambda_: float = 0.2            # readme.md: lambda, risk-aversion weight
     c0: float = 100_000.0           # readme.md: C_0, starting cash (AUD)
+    gamma_au_annual: float = 0.012  # readme.md: gamma^AU, Australian equity franking
+                                     # credit yield (~4% dividend yield x ~70% franked
+                                     # x 30/70 gross-up at the 30% company tax rate),
+                                     # a benefit only an Australian resident taxpayer
+                                     # can use -- see universe.py's L_G for how this
+                                     # gets attributed per ETF via its Australian
+                                     # look-through weight
 
     # ------------------------------------------------------------------ #
     # Run configuration (no readme.md symbol -- these fix the length and
@@ -41,17 +48,32 @@ class ModelConfig:
     # SDDP run controls (see sddp.py's SDDPSolver.run() docstring)
     # ------------------------------------------------------------------ #
     n_outer: int = 10               # cap on outer (zeta re-estimation) iterations
-    n_inner: int = 20               # cap on inner (cut-refinement) iterations per outer iteration
-    n_forward: int = 20             # scenario paths sampled per forward pass
-    n_backward: int = 10            # scenario samples per backward-pass cut
-    gap_tolerance: float = 0.05     # stop the inner loop once within this optimality gap
-    zeta_tolerance: float = 0.05    # stop the outer loop once zeta moves less than this
+    gap_tolerance: float = 0.02     # stop the inner loop once within this optimality gap
+    zeta_tolerance: float = 0.001    # stop the outer loop once zeta moves less than this
+
+    # n_inner/n_forward/n_backward are ramped linearly from *_start (on the
+    # first outer iteration) to *_end (on the last), so early outer
+    # iterations are cheap and fast while later ones get bigger, more
+    # accurate samples -- see SDDPSolver.run()'s docstring for how this
+    # also feeds the weighted-average zeta estimate (weighted by each
+    # iteration's own n_forward, so later, larger-sample iterations
+    # naturally dominate the average too).
+    n_inner_start: int = 15           # inner-loop cap on the first outer iteration
+    n_inner_end: int = 25            # inner-loop cap on the last outer iteration
+    n_forward_start: int = 30        # forward-pass sample size on the first outer iteration
+    n_forward_end: int = 50          # forward-pass sample size on the last outer iteration
+    n_backward_start: int = 15        # backward-pass sample size on the first outer iteration
+    n_backward_end: int = 25         # backward-pass sample size on the last outer iteration
 
     # ------------------------------------------------------------------ #
     # Reporting: buy-and-hold benchmark
     # ------------------------------------------------------------------ #
-    benchmark_ticker: str = "IVV.ASX"   # which ETF to compare the policy against
-    benchmark_min_paths: int = 200      # minimum simulated paths for the benchmark estimate
+    # Simulated with the same n_forward as the policy (see SDDP run
+    # controls above) so the two are compared on an equal sample size --
+    # otherwise a noisier (smaller-sample) policy estimate can look worse
+    # than the benchmark purely from sampling variance, not real
+    # underperformance.
+    benchmark_ticker: str = "DHHF.ASX"  # which ETF to compare the policy against
 
     # ------------------------------------------------------------------ #
     # Solver-internal engineering parameters (no readme.md symbol)
@@ -78,3 +100,17 @@ class ModelConfig:
         """readme.md: T, the number of review points, given the horizon
         and how many months each period spans."""
         return round(self.horizon_years * 12 / self.months_per_period)
+
+    @property
+    def gamma_au_per_period(self) -> float:
+        """readme.md: gamma^AU, scaled from an annual rate to whatever
+        months_per_period is currently set to."""
+        return self.gamma_au_annual * self.months_per_period / 12
+
+    def ramped(self, outer: int, start: float, end: float) -> int:
+        """Linearly interpolate between a *_start and *_end value, given
+        the current outer iteration index (0-based). Reaches *_end exactly
+        on outer = n_outer - 1, regardless of whether the loop actually
+        runs that long (it may stop early via zeta_tolerance)."""
+        frac = outer / max(self.n_outer - 1, 1)
+        return round(start + (end - start) * frac)

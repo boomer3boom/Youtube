@@ -59,6 +59,7 @@ class SDDPSolver:
         self.config = config
         self.rng = rng or np.random.default_rng(7)
         self.rho = {}        # readme.md: RHO_{e,t}, set at the start of run()
+        self.gamma = {}      # readme.md: gamma_e, set at the start of run()
         self.zeta = 0.0       # readme.md: zeta
         self.cuts = {}        # t -> list[Cut], readme.md: Theta_t
 
@@ -107,9 +108,17 @@ class SDDPSolver:
             bal_h[e] = solver.Add(lhs == rhs, f"bal_h_{e}")
 
         # Cash balance (readme.md "Constraints -> Cash balance"):
-        #   C_t = C_{t-1} - sum_e b_{e,t}(1+kappa^buy) + sum_e u_{e,t}(1-kappa^sell)
+        #   C_t = C_{t-1} + sum_e h_{e,t-1} gamma_e
+        #         - sum_e b_{e,t}(1+kappa^buy) + sum_e u_{e,t}(1-kappa^sell)
+        # The gamma_e term is the Australian dividend imputation (franking
+        # credit) benefit: cash paid to an Australian resident taxpayer on
+        # top of the ETF's own price return, proportional to what was held
+        # over the period and to that ETF's Australian look-through weight
+        # (see universe.py's franking_credit_yields()). It's zero for every
+        # ETF with no Australian exposure.
         lhs = c
-        rhs = (c_prev - sum(b[e] * (1 + cfg.kappa_buy) for e in e_set)
+        rhs = (c_prev + sum(self.gamma.get(e, 0.0) * h_prev[e] for e in e_set)
+               - sum(b[e] * (1 + cfg.kappa_buy) for e in e_set)
                + sum(u[e] * (1 - cfg.kappa_sell) for e in e_set))
         bal_c = solver.Add(lhs == rhs, "bal_C")
 
@@ -187,9 +196,14 @@ class SDDPSolver:
         if status != pywraplp.Solver.OPTIMAL:
             raise RuntimeError(f"stage LP not optimal, status={status}")
 
-        # Duals above are w.r.t. the constraint RHS (phi_e*h_prev[e]); the
-        # chain rule through that RHS gives the sensitivity w.r.t. h_prev[e].
-        dual_h_prev = {e: phi_t[e] * bal_h[e].dual_value() for e in e_set}
+        # h_prev[e] enters two constraints' RHS: bal_h_e (scaled by phi_e)
+        # and bal_C (scaled by gamma_e, the franking credit term above).
+        # The chain rule through both gives the total sensitivity of the
+        # objective to h_prev[e] -- omitting the bal_C term here would
+        # silently under-count the value of Australian-look-through
+        # holdings in every cut built from this solve.
+        dual_h_prev = {e: phi_t[e] * bal_h[e].dual_value() + self.gamma.get(e, 0.0) * bal_c.dual_value()
+                       for e in e_set}
 
         return StageResult(
             h={e: h[e].solution_value() for e in e_set},
@@ -289,53 +303,70 @@ class SDDPSolver:
     def run(self, prices_hist, T, verbose=True):
         """Run the SDDP loop (readme.md "Pseudo-algorithm").
 
-        All iteration counts and tolerances (n_outer, n_inner, n_forward,
-        n_backward, gap_tolerance, zeta_tolerance) come from self.config --
-        see config.py to change them.
+        All iteration counts and tolerances come from self.config -- see
+        config.py to change them.
 
-        config.n_inner is a cap (k_max) rather than a fixed iteration
-        count: each inner iteration checks the relative gap between the
-        deterministic bound (the root-stage objective under the current
-        cuts -- an optimistic over-approximation of the true value
-        function) and the statistical bound (the sample mean of the
+        n_inner/n_forward/n_backward are ramped linearly across outer
+        iterations (config.ramped(), from *_start to *_end): early outer
+        iterations are cheap and fast, later ones use bigger, more
+        accurate samples. Each inner iteration checks the relative gap
+        between the deterministic bound (the root-stage objective under
+        the current cuts -- an optimistic over-approximation of the true
+        value function) and the statistical bound (the sample mean of the
         policy's actually-realized objective over the forward pass -- see
         _statistical_bound). Once that gap closes to within
         config.gap_tolerance, the inner loop stops early; set
-        gap_tolerance=None in config.py to always run the full n_inner
-        iterations instead.
+        gap_tolerance=None in config.py to always run the full (ramped)
+        n_inner iterations instead.
 
-        config.n_outer is likewise a cap on the number of times zeta
-        (readme.md's CVaR threshold) gets re-estimated from the realized
-        terminal-wealth distribution. It stops early once the re-estimate
-        barely moves from the value that was actually used to build the
-        current cuts (within config.zeta_tolerance); set
-        zeta_tolerance=None to always run the full n_outer iterations.
-        Either way, self.zeta on return is always the value self.cuts was
-        actually built for -- if the cap is hit before convergence, the
-        most recent re-estimate is discarded rather than returned
-        alongside cuts that don't match it.
+        config.n_outer is a cap on the number of times zeta (readme.md's
+        CVaR threshold) gets re-estimated. Rather than trusting each
+        iteration's fresh quantile estimate on its own, zeta is tracked as
+        a running average across outer iterations weighted by each
+        iteration's own n_forward -- a quantile estimated from more
+        samples has lower variance and deserves more trust, and since
+        n_forward ramps up over the run, later iterations naturally
+        dominate the average without a separately chosen weighting scheme.
+        The outer loop stops early once that weighted average barely moves
+        from the value actually used to build the current cuts (within
+        config.zeta_tolerance); set zeta_tolerance=None to always run the
+        full n_outer iterations. Either way, self.zeta on return is always
+        the value self.cuts was actually built for -- if the cap is hit
+        before convergence, the most recent re-estimate is discarded
+        rather than returned alongside cuts that don't match it.
         """
         cfg = self.config
-        n_outer, n_inner = cfg.n_outer, cfg.n_inner
-        n_forward, n_backward = cfg.n_forward, cfg.n_backward
+        n_outer = cfg.n_outer
         gap_tolerance, zeta_tolerance = cfg.gap_tolerance, cfg.zeta_tolerance
 
         e_set = self.universe.etfs
         returns = historical_log_returns(prices_hist, self.config.months_per_period)
         pe = self.universe.fetch_pe()
         self.rho = self.universe.eligibility(pe, self.config.pe_lower, self.config.pe_upper)
+        self.gamma = self.universe.franking_credit_yields(cfg.gamma_au_per_period)
         if verbose:
             print("Trailing PE used:", {e: round(pe[e], 1) for e in e_set})
             print("Valuation-eligible:", self.rho)
+            print("Franking credit yield per period (gamma_e):",
+                  {e: round(g, 4) for e, g in self.gamma.items()})
             print(f"Bootstrapping from {len(returns)} historical "
                   f"{self.config.months_per_period}-month return observations "
                   f"({'thin -- treat results as illustrative' if len(returns) < 15 else 'ok'})")
 
         self.zeta = 0.0
         terminal_values = []
+        zeta_weighted_sum = 0.0
+        zeta_weight_sum = 0.0
 
         for outer in range(n_outer):
             zeta_used = self.zeta  # the value this iteration's cuts are about to be built for
+
+            n_inner = cfg.ramped(outer, cfg.n_inner_start, cfg.n_inner_end)
+            n_forward = cfg.ramped(outer, cfg.n_forward_start, cfg.n_forward_end)
+            n_backward = cfg.ramped(outer, cfg.n_backward_start, cfg.n_backward_end)
+            if verbose:
+                print(f"[outer {outer}] this iteration's sample sizes: "
+                      f"n_inner<={n_inner}, n_forward={n_forward}, n_backward={n_backward}")
 
             # Every cut encodes value-function information for a *fixed*
             # zeta (it's baked into the terminal stage's objective offset,
@@ -412,13 +443,25 @@ class SDDPSolver:
 
             # ---- re-estimate zeta and check for outer convergence ----
             losses = [-tv for tv in terminal_values]
-            zeta_candidate = float(np.quantile(losses, self.config.alpha))
+            zeta_sample = float(np.quantile(losses, self.config.alpha))
+
+            # Weighted running average across outer iterations, weighted
+            # by each iteration's own n_forward: a quantile estimated from
+            # more samples has lower variance and deserves more trust, and
+            # since n_forward is ramped up over the run, later iterations
+            # naturally dominate the average without a separate weighting
+            # scheme.
+            zeta_weighted_sum += n_forward * zeta_sample
+            zeta_weight_sum += n_forward
+            zeta_candidate = zeta_weighted_sum / zeta_weight_sum
+
             zeta_change = (abs(zeta_candidate - zeta_used) / max(abs(zeta_used), 1e-9)
                            if outer > 0 else None)
             if verbose:
                 change_msg = f", change from this iteration's zeta: {zeta_change:.1%}" if zeta_change is not None else ""
-                print(f"[outer {outer}] re-estimated zeta (VaR at {self.config.alpha:.0%}) = "
-                      f"{-zeta_candidate:,.0f} AUD terminal wealth{change_msg}")
+                print(f"[outer {outer}] this iteration's raw zeta estimate (VaR at "
+                      f"{self.config.alpha:.0%}) = {-zeta_sample:,.0f} AUD; "
+                      f"weighted-average zeta = {-zeta_candidate:,.0f} AUD{change_msg}")
 
             converged = (zeta_tolerance is not None and zeta_change is not None
                          and zeta_change <= zeta_tolerance)

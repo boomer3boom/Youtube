@@ -37,6 +37,20 @@ class ETFUniverse:
         """readme.md: S, sectors/themes ETF holdings look through to."""
         return sorted({s for exposure in self.sector.values() for s in exposure})
 
+    def franking_credit_yields(self, gamma_au_per_period):
+        """readme.md: gamma_e = L^G_{e,Australia} * gamma^AU.
+
+        Franking credits are only worth something to an Australian
+        resident taxpayer, and only accrue on the Australian-equity slice
+        of a fund's underlying holdings -- so this reuses the geographic
+        look-through weight already in `geo` rather than needing a new
+        per-ETF data table. IOZ.ASX (100% Australian) gets the full
+        gamma^AU; DHHF.ASX gets roughly its ~37% Australian weight's worth;
+        everything else (IVV.ASX, NDQ.ASX, IJP.ASX, IEM.ASX, BRK-B) gets
+        ~0, since none of their look-through exposure is Australian.
+        """
+        return {e: self.geo[e].get("Australia", 0.0) * gamma_au_per_period for e in self.etfs}
+
     def fetch_prices(self, period="8y"):
         """readme.md: P_{e,t}, all converted to a single currency (AUD)."""
         yf_tickers = list(dict.fromkeys(list(self.ticker_map.values()) + ["AUDUSD=X"]))

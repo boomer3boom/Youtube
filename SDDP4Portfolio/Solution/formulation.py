@@ -9,7 +9,7 @@ import numpy as np
 from config import ModelConfig
 from sddp import SDDPSolver
 from universe import ETFUniverse
-from utils.scenarios import buy_and_hold_benchmark, historical_log_returns
+from utils.scenarios import analytic_buy_and_hold_mean, buy_and_hold_benchmark, historical_log_returns
 
 
 def main():
@@ -33,16 +33,30 @@ def main():
 
     returns = historical_log_returns(prices_hist, config.months_per_period)
     benchmark_label = config.benchmark_ticker
+    benchmark_index = universe.etfs.index(benchmark_label)
+
+    # Mean: computed analytically (exact, zero sampling noise) -- unlike
+    # the policy, a buy-and-hold position has no solved decisions, so its
+    # expected value has a closed form under the same bootstrap assumption.
+    benchmark_mean = analytic_buy_and_hold_mean(returns, T, benchmark_index, config.c0)
+    # Tail: no closed form, so still simulated -- but at the same sample
+    # size as the policy (config.n_forward, via len(terminal_values)) so
+    # that comparison specifically stays apples-to-apples.
     benchmark_values = buy_and_hold_benchmark(
-        returns, T, solver.rng, universe.etfs.index(benchmark_label), config.c0,
-        n_forward=max(config.benchmark_min_paths, len(terminal_values)),
+        returns, T, solver.rng, benchmark_index, config.c0,
+        n_forward=len(terminal_values),
     )
 
+    worst_pct = int((1 - config.alpha) * 100)
+    policy_worst = np.quantile(terminal_values, 1 - config.alpha)
+    benchmark_worst = np.quantile(benchmark_values, 1 - config.alpha)
+
     print(f"\n--- Results over a {T}-period horizon ({len(terminal_values)} simulated paths) ---")
-    print(f"Policy   mean terminal wealth: {np.mean(terminal_values):,.0f} AUD "
-          f"(CVaR_{config.alpha:.0%}: {-zeta:,.0f})")
-    print(f"{benchmark_label} buy-and-hold benchmark: {np.mean(benchmark_values):,.0f} AUD "
-          f"(worst {int((1 - config.alpha) * 100)}%: {np.quantile(benchmark_values, 1 - config.alpha):,.0f})")
+    print(f"Policy   mean terminal wealth: {np.mean(terminal_values):,.0f} AUD (simulated, "
+          f"{len(terminal_values)} paths) (worst {worst_pct}%: {policy_worst:,.0f}, "
+          f"VaR_{config.alpha:.0%}: {-zeta:,.0f})")
+    print(f"{benchmark_label} buy-and-hold benchmark: {benchmark_mean:,.0f} AUD (analytic mean) "
+          f"(worst {worst_pct}%: {benchmark_worst:,.0f}, simulated over {len(benchmark_values)} paths)")
 
     action = solver.recommend_action(T)
     print("\n--- Suggested action today (period 1, starting from all cash) ---")
