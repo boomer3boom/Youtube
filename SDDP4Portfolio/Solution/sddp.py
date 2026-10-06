@@ -24,7 +24,7 @@ from typing import NamedTuple
 import numpy as np
 from ortools.linear_solver import pywraplp
 
-from utils.scenarios import historical_log_returns, sample_growth_factors, simulate_phi_path
+from utils.scenarios import historical_log_returns, simulate_phi_path
 
 
 class Cut(NamedTuple):
@@ -141,6 +141,15 @@ class SDDPSolver:
             lhs = sum(universe.geo[e].get(g, 0.0) * h[e] for e in e_set)
             rhs = cfg.theta_g_bar * v
             solver.Add(lhs <= rhs, f"geo_{g}")
+
+        # Geographic minimums (readme.md "Constraints -> Geographic minimums"):
+        #   sum_e h_{e,t} L^G_{e,g} >= theta-underline^G_g * V_t, only for
+        #   regions given a minimum in config.theta_g_min. Involves no
+        #   incoming state, so no cut subgradient needs to account for it.
+        for g, minimum in cfg.theta_g_min.items():
+            lhs = sum(universe.geo[e].get(g, 0.0) * h[e] for e in e_set)
+            rhs = minimum * v
+            solver.Add(lhs >= rhs, f"geo_min_{g}")
 
         # Sector look-through limit (readme.md "Constraints -> Geographic
         # and sector look-through limits"): sum_e h_{e,t} L^S_{e,s} <= theta-bar^S_s * V_t
@@ -300,24 +309,57 @@ class SDDPSolver:
         se = float(np.std(g, ddof=1) / np.sqrt(len(g))) if len(g) > 1 else 0.0
         return mean, se
 
+    def _check_region_minimums(self, T):
+        """Fail fast, with a readable message, if config.theta_g_min can't
+        be met -- otherwise the first stage LP fails deep inside run() with
+        a bare solver status. Checking the all-cash root state is enough:
+        selling is unrestricted and every limit scales with V, so any later
+        state can sell down and reach whatever the root could (readme.md
+        "Constraints -> Geographic minimums").
+        """
+        minimums = self.config.theta_g_min
+        unknown = sorted(set(minimums) - set(self.universe.regions))
+        if unknown:
+            raise ValueError(f"theta_g_min names regions no ETF has look-through exposure to: "
+                             f"{unknown}. Known regions: {self.universe.regions}")
+        too_high = {g: m for g, m in minimums.items() if m > self.config.theta_g_bar}
+        if too_high:
+            raise ValueError(f"theta_g_min {too_high} exceeds the region cap "
+                             f"theta_g_bar={self.config.theta_g_bar}")
+        if not minimums:
+            return
+        try:
+            self.recommend_action(T)
+        except RuntimeError:
+            raise ValueError(
+                f"No allocation satisfies theta_g_min={minimums} alongside the other limits "
+                f"(w_bar={self.config.w_bar}, theta_g_bar={self.config.theta_g_bar}, "
+                f"theta_s_bar={self.config.theta_s_bar}) using only valuation-eligible ETFs "
+                f"({[e for e in self.universe.etfs if self.rho[e]]}). Lower the minimums or "
+                f"add an ETF with more exposure to those regions.") from None
+
     def run(self, prices_hist, T, verbose=True):
         """Run the SDDP loop (readme.md "Pseudo-algorithm").
 
         All iteration counts and tolerances come from self.config -- see
         config.py to change them.
 
-        n_inner/n_forward/n_backward are ramped linearly across outer
-        iterations (config.ramped(), from *_start to *_end): early outer
-        iterations are cheap and fast, later ones use bigger, more
-        accurate samples. Each inner iteration checks the relative gap
-        between the deterministic bound (the root-stage objective under
-        the current cuts -- an optimistic over-approximation of the true
-        value function) and the statistical bound (the sample mean of the
-        policy's actually-realized objective over the forward pass -- see
-        _statistical_bound). Once that gap closes to within
-        config.gap_tolerance, the inner loop stops early; set
-        gap_tolerance=None in config.py to always run the full (ramped)
-        n_inner iterations instead.
+        n_inner/n_forward are ramped linearly across outer iterations
+        (config.ramped(), from *_start to *_end): early outer iterations
+        are cheap and fast, later ones use bigger, more accurate samples.
+        The backward pass has no sample size to ramp -- it always
+        enumerates every scenario in the bootstrap pool (see the backward
+        pass below for why). Each inner iteration compares the
+        deterministic bound (the root-stage objective under the current
+        cuts -- an optimistic over-approximation of the true value
+        function) against the statistical bound (the sample mean and
+        standard error of the policy's actually-realized objective over
+        the forward pass -- see _statistical_bound). Once the deterministic
+        bound is within config.gap_ci_z standard errors above the
+        statistical mean -- i.e. the remaining gap is indistinguishable
+        from forward-pass sampling noise -- the inner loop stops early; set
+        gap_ci_z=None in config.py to always run the full (ramped) n_inner
+        iterations instead.
 
         config.n_outer is a cap on the number of times zeta (readme.md's
         CVaR threshold) gets re-estimated. Rather than trusting each
@@ -337,13 +379,19 @@ class SDDPSolver:
         """
         cfg = self.config
         n_outer = cfg.n_outer
-        gap_tolerance, zeta_tolerance = cfg.gap_tolerance, cfg.zeta_tolerance
+        gap_ci_z, zeta_tolerance = cfg.gap_ci_z, cfg.zeta_tolerance
+        ci_z = gap_ci_z if gap_ci_z is not None else 1.96  # for reporting when not stopping on it
 
         e_set = self.universe.etfs
         returns = historical_log_returns(prices_hist, self.config.months_per_period)
+        # Backward-pass scenario set: every joint growth-factor vector in
+        # the bootstrap pool, each equally likely (readme.md: Omega_t, the
+        # same at every stage under the stagewise-independent bootstrap).
+        scenarios = [dict(zip(e_set, phi)) for phi in np.exp(returns)]
         pe = self.universe.fetch_pe()
         self.rho = self.universe.eligibility(pe, self.config.pe_lower, self.config.pe_upper)
         self.gamma = self.universe.franking_credit_yields(cfg.gamma_au_per_period)
+        self._check_region_minimums(T)
         if verbose:
             print("Trailing PE used:", {e: round(pe[e], 1) for e in e_set})
             print("Valuation-eligible:", self.rho)
@@ -351,7 +399,8 @@ class SDDPSolver:
                   {e: round(g, 4) for e, g in self.gamma.items()})
             print(f"Bootstrapping from {len(returns)} historical "
                   f"{self.config.months_per_period}-month return observations "
-                  f"({'thin -- treat results as illustrative' if len(returns) < 15 else 'ok'})")
+                  f"({'thin -- treat results as illustrative' if len(returns) < 15 else 'ok'}), "
+                  f"all enumerated in every backward pass")
 
         self.zeta = 0.0
         terminal_values = []
@@ -363,10 +412,9 @@ class SDDPSolver:
 
             n_inner = cfg.ramped(outer, cfg.n_inner_start, cfg.n_inner_end)
             n_forward = cfg.ramped(outer, cfg.n_forward_start, cfg.n_forward_end)
-            n_backward = cfg.ramped(outer, cfg.n_backward_start, cfg.n_backward_end)
             if verbose:
                 print(f"[outer {outer}] this iteration's sample sizes: "
-                      f"n_inner<={n_inner}, n_forward={n_forward}, n_backward={n_backward}")
+                      f"n_inner<={n_inner}, n_forward={n_forward}")
 
             # Every cut encodes value-function information for a *fixed*
             # zeta (it's baked into the terminal stage's objective offset,
@@ -397,21 +445,31 @@ class SDDPSolver:
                 # ---- convergence check (readme.md "Pseudo-algorithm") ----
                 deterministic_bound = self.recommend_action(T).obj
                 statistical_mean, statistical_se = self._statistical_bound(terminal_values)
-                gap = abs(deterministic_bound - statistical_mean) / max(abs(statistical_mean), 1e-9)
+                ci_half_width = ci_z * statistical_se
+                # Signed, not abs(): this is a maximisation, so valid cuts
+                # keep the deterministic bound at or above the policy's true
+                # value. A negative gap beyond the CI means the cuts are
+                # under-estimating the value-to-go, and abs() would hide it.
+                gap = (deterministic_bound - statistical_mean) / max(abs(statistical_mean), 1e-9)
                 if verbose:
                     print(f"outer {outer} inner {inner}: mean terminal value = "
                           f"{float(np.mean(terminal_values)):,.0f}  "
                           f"deterministic={deterministic_bound:,.0f} "
-                          f"statistical={statistical_mean:,.0f}(+/-{1.96 * statistical_se:,.0f}) "
-                          f"gap={gap:.1%}")
-                if gap_tolerance is not None and gap <= gap_tolerance:
+                          f"statistical={statistical_mean:,.0f}(+/-{ci_half_width:,.0f}) "
+                          f"gap={gap:+.1%}")
+                    if deterministic_bound < statistical_mean - ci_half_width:
+                        print("  warning: deterministic bound is below the statistical CI -- "
+                              "the cuts are not acting as a valid upper bound")
+                if gap_ci_z is not None and deterministic_bound <= statistical_mean + ci_half_width:
                     if verbose:
-                        print(f"  converged: gap {gap:.1%} <= tolerance {gap_tolerance:.1%} "
-                              f"after {inner + 1} inner iteration(s)")
+                        print(f"  converged: deterministic bound within the statistical CI "
+                              f"(z={gap_ci_z}) after {inner + 1} inner iteration(s)")
                     break
 
                 # ---- backward pass ----
-                for t in range(T, 0, -1):
+                # Stops at t=2: a stage-t solve only feeds a cut for stage
+                # t-1, and there's no stage 0 to build one for.
+                for t in range(T, 1, -1):
                     seen_states = set()
                     for phi_path, states in zip(phi_paths, trial_states):
                         h_prev, c_prev = states[t - 1]
@@ -426,9 +484,17 @@ class SDDPSolver:
                             continue
                         seen_states.add(state_key)
 
+                        # Enumerate the whole pool rather than sampling it:
+                        # the cut needs the *exact* expectation over phi_t.
+                        # A sampled average is noisy, theta takes the
+                        # minimum over cuts, so the cuts that happened to
+                        # come out low are the ones that bind -- a downward
+                        # bias that compounds back through every stage
+                        # until the deterministic bound falls below what
+                        # the policy actually achieves (formulation.md
+                        # "Value function and cuts").
                         vals, duals_h, duals_c = [], [], []
-                        for phi_sample in sample_growth_factors(returns, n_backward, self.rng):
-                            phi_t = dict(zip(e_set, phi_sample))
+                        for phi_t in scenarios:
                             sol = self.solve_stage_robust(phi_t, h_prev, c_prev,
                                                            self.cuts.get(t, []), terminal=(t == T))
                             vals.append(sol.obj)
@@ -437,9 +503,8 @@ class SDDPSolver:
                         q_hat_raw = float(np.mean(vals))
                         dual_h_avg = {e: float(np.mean([d[e] for d in duals_h])) for e in e_set}
                         dual_c_avg = float(np.mean(duals_c))
-                        if t > 1:
-                            new_cut = self._build_cut(q_hat_raw, dual_h_avg, dual_c_avg, h_prev, c_prev)
-                            self._add_cut(t - 1, new_cut)
+                        new_cut = self._build_cut(q_hat_raw, dual_h_avg, dual_c_avg, h_prev, c_prev)
+                        self._add_cut(t - 1, new_cut)
 
             # ---- re-estimate zeta and check for outer convergence ----
             losses = [-tv for tv in terminal_values]

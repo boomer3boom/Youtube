@@ -113,8 +113,9 @@ class ETFUniverse:
 
     @classmethod
     def default(cls):
-        """The seven-ETF universe used throughout this project: IVV.ASX,
-        IOZ.ASX, NDQ.ASX, DHHF.ASX, BRK-B, IJP.ASX, IEM.ASX.
+        """The nine-ETF universe used throughout this project: IVV.ASX,
+        IOZ.ASX, NDQ.ASX, DHHF.ASX, BRK-B, IJP.ASX, IEM.ASX, QLTY.ASX,
+        ESTX.ASX.
 
         NDQ.ASX and IEM.ASX replace this universe's original U100/BEMG.ASX
         picks: U100.AX only listed in August 2023 and BEMG.AX in September
@@ -126,11 +127,24 @@ class ETFUniverse:
 
         Geographic look-through weights (geo, below) are indicative, not
         sourced from a live factsheet feed -- Yahoo doesn't expose a
-        country/region breakdown for these funds. Figures for IOZ.ASX,
-        DHHF.ASX and IEM.ASX are reused from
-        Stock-Stochastic/CVar/StockWithCVar.py elsewhere in this repo
-        (which already used these same tickers); the rest are rough
-        estimates from each fund's known style/region. Sector look-through
+        country/region breakdown for these funds. They are deliberately
+        kept at continent level (North America, South America, Europe,
+        Asia, Africa, Australia) and rounded to whole percentages: the
+        underlying figures are hand-typed estimates, so a country-level
+        breakdown would suggest precision the data doesn't have. Australia
+        stays a region in its own right -- it's a continent, and it's the
+        key franking_credit_yields() reads. Figures for DHHF.ASX and
+        IEM.ASX are their earlier country-level estimates (reused from
+        Stock-Stochastic/CVar/StockWithCVar.py) summed by continent,
+        geographically (Mexico in North America, Saudi Arabia in Asia);
+        each leaves ~7-8% unattributed, which counts towards no region's
+        limit. QLTY.ASX (BetaShares Global Quality Leaders, global
+        ex-Australia, unhedged) is BetaShares' published country allocation
+        as at 31/08/2026 summed by continent, with 3% "other" unattributed;
+        ESTX.ASX (Global X EURO STOXX 50) is all Eurozone. The rest are
+        single-region funds. Both QLTY.ASX (listed 2018) and ESTX.ASX
+        (2016) predate DHHF.ASX, so adding them doesn't shorten the
+        bootstrap history. Sector look-through
         data, by contrast, is fetched live -- see fetch_sector_weightings().
         BRK-B trades in USD and is converted to AUD each period via the
         AUDUSD=X spot rate.
@@ -143,21 +157,22 @@ class ETFUniverse:
             "BRK-B": "BRK-B",
             "IJP.ASX": "IJP.AX",
             "IEM.ASX": "IEM.AX",
+            "QLTY.ASX": "QLTY.AX",
+            "ESTX.ASX": "ESTX.AX",
         }
         usd_tickers = {"BRK-B"}
         geo = {
-            "IVV.ASX": {"USA": 1.0},
+            "IVV.ASX": {"North America": 1.0},
             "IOZ.ASX": {"Australia": 1.0},
-            "NDQ.ASX": {"USA": 1.0},
-            "DHHF.ASX": {"USA": 0.424, "Australia": 0.37, "Japan": 0.038, "China": 0.018,
-                         "Canada": 0.018, "Britain": 0.016, "India": 0.014, "Taiwan": 0.014,
-                         "Germany": 0.011},
-            "BRK-B": {"USA": 1.0},
-            "IJP.ASX": {"Japan": 1.0},
-            "IEM.ASX": {"China": 0.2766, "Taiwan": 0.1969, "India": 0.1939, "Korea": 0.09,
-                        "Saudi Arabia": 0.04, "Brazil": 0.04, "South Africa": 0.0295,
-                        "Mexico": 0.0179, "Malaysia": 0.0148, "Indonesia": 0.0146, "Thailand": 0.0142},
+            "NDQ.ASX": {"North America": 1.0},
+            "DHHF.ASX": {"North America": 0.44, "Australia": 0.37, "Asia": 0.08, "Europe": 0.03, "Other": 0.08},
+            "BRK-B": {"North America": 1.0},
+            "IJP.ASX": {"Asia": 1.0},
+            "IEM.ASX": {"Asia": 0.84, "South America": 0.04, "Other": 0.12},
+            "QLTY.ASX": {"North America": 0.67, "Asia": 0.16, "Europe": 0.14, "Other": 0.03},
+            "ESTX.ASX": {"Europe": 1.0},
         }
         pe_fallback = {"IVV.ASX": 25.0, "IOZ.ASX": 20.0, "NDQ.ASX": 28.0, "DHHF.ASX": 22.0,
-                       "BRK-B": 15.0, "IJP.ASX": 18.0, "IEM.ASX": 16.0}
+                       "BRK-B": 15.0, "IJP.ASX": 18.0, "IEM.ASX": 16.0, "QLTY.ASX": 28.0,
+                       "ESTX.ASX": 18.0}
         return cls(ticker_map, usd_tickers, geo, pe_fallback)

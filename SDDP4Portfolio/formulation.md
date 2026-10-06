@@ -53,7 +53,7 @@ sector, and valuation limits at every review point.
 |---|---|
 | $\mathcal{E}$ | Universe of investable ETFs, indexed by $e$ |
 | $\mathcal{T} = \{0, 1, \dots, T\}$ | Review points (time periods) over the investment horizon, indexed by $t$ |
-| $\mathcal{G}$ | Geographic regions / countries that ETF holdings can be attributed to, indexed by $g$ |
+| $\mathcal{G}$ | Geographic regions (continents: North America, South America, Europe, Asia, Africa, Australia) that ETF holdings can be attributed to, indexed by $g$ |
 | $\mathcal{S}$ | Sectors / themes that ETF holdings can be attributed to, indexed by $s$ |
 
 ## Data
@@ -87,6 +87,7 @@ sector, and valuation limits at every review point.
 | $\kappa^{buy}, \kappa^{sell}$ | Proportional transaction cost applied to the value bought / sold |
 | $\overline{w}$ | Maximum permitted holding weight for any single ETF |
 | $\overline{\theta}^{G}_{g}$ | Maximum permitted portfolio exposure to region $g$ |
+| $\underline{\theta}^{G}_{g}$ | Minimum required portfolio exposure to region $g$ (zero, i.e. no requirement, for any region not given one) |
 | $\overline{\theta}^{S}_{s}$ | Maximum permitted portfolio exposure to sector/theme $s$ |
 | $\gamma^{AU}$ | Average per-period franking credit yield on Australian equities (e.g. dividend yield $\times$ franking level $\times \frac{t_c}{1-t_c}$ at the $t_c=30\%$ company tax rate) |
 | $\gamma_{e} = L^{G}_{e,\text{Australia}} \cdot \gamma^{AU}$ | Effective franking credit yield of ETF $e$, derived from how much of its look-through exposure is Australian |
@@ -116,7 +117,8 @@ At each review point $t$, and for each ETF $e$, the problem chooses:
 with $w_{e,t}$ bounded above by $\overline{w}$, and the region/sector
 look-through exposures $\sum_{e} w_{e,t} L^{G}_{e,g}$ and
 $\sum_{e} w_{e,t} L^{S}_{e,s}$ bounded above by $\overline{\theta}^{G}_{g}$
-and $\overline{\theta}^{S}_{s}$ respectively, at every review point.
+and $\overline{\theta}^{S}_{s}$ respectively, and the region exposures
+bounded below by $\underline{\theta}^{G}_{g}$, at every review point.
 
 ### State and auxiliary variables
 
@@ -219,6 +221,24 @@ $$
 \sum_{e} h_{e,t}\, L^{S}_{e,s} \le \overline{\theta}^{S}_{s}\, V_t \qquad \forall s \in \mathcal{S}
 $$
 
+**Geographic minimums** (guarantee exposure to chosen regions, rather than
+only capping it):
+
+$$
+\sum_{e} h_{e,t}\, L^{G}_{e,g} \ge \underline{\theta}^{G}_{g}\, V_t \qquad \forall g \in \mathcal{G}
+$$
+
+Only regions given a positive $\underline{\theta}^{G}_{g}$ get this
+constraint. Since $V_t$ includes cash, a minimum also limits how much the
+policy can sit in cash. The constraint involves only this period's
+$h_{e,t}$ and $V_t$, never the incoming state, so it doesn't add a term
+to any cut subgradient. It can make a stage infeasible: if the only ETFs
+with exposure to $g$ fail the valuation gate, or the holding and region
+caps leave too little room, no allocation satisfies every minimum. Selling
+is unrestricted and every limit scales with $V_t$, so if the all-cash
+starting state can satisfy the minimums, every later state can too, and
+one check at $t=1$ is enough.
+
 **Valuation gate** (cannot buy into an ETF trading outside the acceptable PE band):
 
 $$
@@ -257,18 +277,31 @@ $$
 Each cut $k$ is built by fixing the incoming state of the period-$(t+1)$
 problem to a previously visited trial point $\hat{x}_t^{(k)}$ (treating
 $h_{e,t}=\hat{h}_{e,t}^{(k)}$ and $C_t=\hat{C}_t^{(k)}$ as constraints
-rather than free variables), solving it for a sample of growth-factor
-realisations $\phi_{t+1} \in \Omega_{t+1}$, and reading off:
+rather than free variables), solving it for **every** growth-factor
+realisation $\phi_{t+1} \in \Omega_{t+1}$, and reading off:
 
-- $\hat{Q}_{t+1}^{(k)}$ — the sample-average optimal objective value, and
-- $\bar{\pi}_{t+1}^{(k)}$ — the sample-average dual price (shadow price)
-  on the state-fixing constraints.
+- $\hat{Q}_{t+1}^{(k)}$ — the probability-weighted average optimal
+  objective value, and
+- $\bar{\pi}_{t+1}^{(k)}$ — the probability-weighted average dual price
+  (shadow price) on the state-fixing constraints.
 
 Because $\mathcal{Q}_{t+1}$ is concave and piecewise-linear in the state
 (a property inherited from LP duality), every such cut is a valid outer
-approximation — $\theta_t$ can never exceed the true value-to-go, and the
-approximation tightens monotonically as more cuts accumulate near the
-states the policy actually visits.
+approximation — it lies on or above $\mathcal{Q}_{t+1}$ everywhere, so
+$\theta_t$ (the minimum over all cuts) can never fall *below* the true
+value-to-go, and the approximation tightens monotonically as more cuts
+accumulate near the states the policy actually visits.
+
+That validity depends on $\hat{Q}$ and $\bar{\pi}$ being the *exact*
+expectation over $\Omega_{t+1}$. Estimating them from a random sample of
+$\Omega_{t+1}$ instead gives noisy cuts, and since $\theta_t$ takes the
+minimum over cuts, the ones whose noise happened to be low are the ones
+that bind. That biases the approximation downward, the bias compounds back
+through every stage, and the resulting bound can sit below the value the
+policy actually achieves. Here $\Omega_{t+1}$ is the historical bootstrap
+pool (one joint growth-factor vector per overlapping rolling window, each
+equally likely, identical at every stage), which is small enough to
+enumerate in full.
 
 ### Pseudo-algorithm
 
@@ -287,19 +320,23 @@ repeat
             solve stage-t problem Q_t(x_{t-1}(ω), φ_t(ω)) using
                 the current cuts Θ_t as an approximation of θ_t
             record trial state  x_t(ω)  and stage contribution
-    compute a statistical estimate (mean ± CI) of total objective
-        across sampled paths            -> candidate solution bound
+    compute a statistical estimate (mean ± z·SE) of total objective
+        across sampled paths            -> statistical bound
     read the root-stage objective (t = 0, with all current cuts)
-                                         -> deterministic bound
+                                         -> deterministic (upper) bound
 
     # ---- convergence check ----
-    if gap(deterministic bound, statistical bound) ≤ ε or k = k_max:
+    # The deterministic bound is exact given the cuts; the statistical
+    # bound is a Monte Carlo estimate. Stop once the former is
+    # indistinguishable from the latter at confidence level z.
+    if deterministic bound ≤ statistical mean + z·SE or k = k_max:
         break
 
     # ---- backward pass ----
     for t = T down to 1:
         for each distinct trial state x_{t-1}(ω) visited above:
-            for each growth-factor realisation φ_t in Ω_t (all, or a sample):
+            for each growth-factor realisation φ_t in Ω_t (all of them,
+                    never a sample -- see "Value function and cuts"):
                 fix incoming state to x_{t-1}(ω)
                 solve stage-t problem -> optimal value, dual prices
             average the values and duals across realisations

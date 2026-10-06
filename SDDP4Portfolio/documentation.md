@@ -26,8 +26,9 @@ only the numerical machinery in `Solution/sddp.py` and
 
 - Each stage's LP is standard (linear constraints, Rockafellar-Uryasev
   CVaR linearisation). The hard part is the continuation value
-  $Q_{t+1}(h_t, C_t)$, approximated from below by Benders cuts built from
-  LP dual values at trial states.
+  $Q_{t+1}(h_t, C_t)$, approximated from above (outer approximation of a
+  concave function, maximisation) by Benders cuts built from LP dual values
+  at trial states.
 - State is dollar value, not units (`h = \phi h_{prev} + b - u`) — keeps
   the continuation value a function of state alone, independent of price
   level.
@@ -37,8 +38,12 @@ only the numerical machinery in `Solution/sddp.py` and
   under-count it.
 - Forward pass: simulate `n_forward` paths, solve stage LPs along each.
   Backward pass: for each *distinct* state visited at stage $t-1$ (dupes
-  collapsed), resample `n_backward` fresh $\phi_t$, average objective/duals
-  into one cut per state.
+  collapsed), solve for **every** $\phi_t$ in the bootstrap pool and
+  average objective/duals into one cut per state — the exact expectation,
+  not a sample. Sampled averages are noisy, the cut minimum picks out the
+  ones that came out low, and that downward bias compounds back through all $T$
+  stages until the "upper" bound sits below the policy's realised value.
+  Enumeration costs `len(returns)` LPs per state (~70 at $k=12$).
 
 ## CVaR: fixed-$\zeta$ outer loop, not a state variable
 
@@ -58,17 +63,23 @@ only the numerical machinery in `Solution/sddp.py` and
 - **Inner loop**: deterministic bound (root-stage objective under current
   cuts, `recommend_action`) vs. statistical bound (sample mean/SE of
   realised objective over the forward pass, `_statistical_bound`). Stops
-  when the gap $\le$ `gap_tolerance`.
+  once deterministic $\le$ statistical mean $+$ `gap_ci_z`$\cdot$SE, i.e.
+  the gap is indistinguishable from sampling noise. The printed gap is
+  signed; a deterministic bound *below* the statistical CI means the cuts
+  are invalid (a bug), and is flagged as a warning.
 - **Outer loop**: stops when the weighted $\zeta$ average moves by
   $\le$ `zeta_tolerance`, or `n_outer` is hit.
-- `n_inner`/`n_forward`/`n_backward` ramp small→large across outer
-  iterations (`config.ramped`).
+- `n_inner`/`n_forward` ramp small→large across outer iterations
+  (`config.ramped`). There is no `n_backward`: the backward pass always
+  enumerates the full pool.
 - The statistical bound is a *fresh* resample every inner iteration, so its
   own CI width is a noise floor on the achievable gap — an oscillating gap
   late in a run reflects that floor (scales as $1/\sqrt{n_{forward}}$), not
-  a bug. Don't chase a tight `gap_tolerance` without raising `n_forward`.
+  a bug. That's why the stopping test compares against the CI rather than
+  a fixed relative tolerance — tighter certainty needs a larger `n_forward`.
 - Degeneracy guards: near-duplicate cuts dropped, cuts per stage capped
-  (FIFO), duplicate states collapsed to one backward solve — all to stop
+  (FIFO, `max_cuts_per_stage` — set generously, since every dropped cut
+  loosens the bound), duplicate states collapsed to one backward solve — all to stop
   GLOP's simplex landing on an almost-singular basis.
 
 ## Testing — current state

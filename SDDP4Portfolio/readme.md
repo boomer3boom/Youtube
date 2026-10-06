@@ -44,7 +44,14 @@ convergence, and prints:
   VaR<sub>95%</sub>) against an analytic buy-and-hold benchmark on the same
   sample size,
 - a concrete buy/hold recommendation for *today* (period 1, starting from
-  all cash), broken down by ETF with dollar amounts and resulting weights.
+  all cash), broken down by ETF with dollar amounts and resulting weights,
+- a plain-English explanation of that recommendation
+  ([Solution/explainer.py](Solution/explainer.py)): which constraints are
+  binding, the role each holding plays (primary return driver, hedge,
+  diversifier, residual allocation, ...) with the statistics behind it, and
+  why each unheld ETF was left out. Roles are interpretations of historical
+  data, not the optimiser's own reasoning; the binding constraints are read
+  directly from the solution.
 
 A full run currently takes several minutes, dominated by the SDDP outer/inner
 iteration loop — see `ModelConfig` in [Solution/config.py](Solution/config.py)
@@ -66,7 +73,8 @@ look-through data) lives in
 
 ## Known limitations
 
-- Geographic look-through weights are hand-typed estimates, not sourced from
+- Geographic look-through weights are hand-typed, continent-level estimates
+  (deliberately no finer, to avoid implying precision), not sourced from
   a live feed — Yahoo Finance doesn't expose a country/region breakdown for
   these funds. Sector look-through data, by contrast, is fetched live.
 - The bootstrap is stagewise-independent (each period's return is drawn i.i.d.

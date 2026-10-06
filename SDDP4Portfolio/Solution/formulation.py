@@ -7,6 +7,7 @@ the ETF/ticker data, and sddp.py for the solver itself.
 import numpy as np
 
 from config import ModelConfig
+from explainer import PortfolioExplainer
 from sddp import SDDPSolver
 from universe import ETFUniverse
 from utils.scenarios import analytic_buy_and_hold_mean, buy_and_hold_benchmark, historical_log_returns
@@ -66,6 +67,9 @@ def main():
     cash_weight = action.c / action.v if action.v else 0.0
     print(f"{'Cash':10s}: {'':>10}{'':3}    hold {action.c:>10,.0f} AUD ({cash_weight:6.1%})")
     print(f"Total portfolio value after this trade: {action.v:,.0f} AUD")
+
+    explainer = PortfolioExplainer(universe, config, prices_hist, action, solver.rho, solver.gamma)
+    print(explainer.report())
 
 
 if __name__ == "__main__":

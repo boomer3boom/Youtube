@@ -28,6 +28,7 @@ Solution/
   config.py         ModelConfig -- every user-tunable parameter, one place
   universe.py       ETFUniverse -- tickers, currency, geo/sector look-through, prices, PE
   sddp.py           SDDPSolver -- the actual SDDP algorithm (Cut, StageResult, solve_stage, run, recommend_action)
+  explainer.py      PortfolioExplainer -- plain-English "why" for a recommended allocation
   utils/
     scenarios.py    scenario generation and the buy-and-hold benchmark (no solver/config dependency)
 ```
@@ -38,7 +39,7 @@ Solution/
   here, not as a local constant or a function default elsewhere.
 - `universe.py`'s `ETFUniverse` owns everything about *which* ETFs are in
   play and their static data (ticker mapping, currency, geographic/sector
-  look-through). `ETFUniverse.default()` is the current 7-ETF universe;
+  look-through). `ETFUniverse.default()` is the current 9-ETF universe;
   changing the universe means editing that classmethod, not scattering
   ticker strings through other files.
 - `sddp.py`'s `SDDPSolver` owns the algorithm: `solve_stage` (single-period
@@ -46,6 +47,13 @@ Solution/
   `_build_cut`/`_is_duplicate_cut`/`_add_cut` (Benders cut bookkeeping),
   `run` (the outer/inner iteration loop), `recommend_action` (solve period 1
   from the true root state for a concrete recommendation).
+- `explainer.py`'s `PortfolioExplainer` is reporting only: it reads a
+  `StageResult` back against the historical data and constraints and never
+  feeds anything into the solver. Keep its two kinds of output distinct —
+  binding constraints are facts read off the solution; roles (driver,
+  hedge, diversifier, ...) are heuristics on historical statistics, with
+  thresholds in `ModelConfig`'s `explain_*` fields. It must stay
+  universe-agnostic: no ticker, region or sector names in the code.
 - `utils/scenarios.py` has no dependency on `config.py` or `sddp.py` —
   it's pure return-data manipulation (historical log-returns, bootstrap
   sampling, the buy-and-hold benchmark), kept separate so it can be tested
@@ -88,7 +96,7 @@ Solution/
   reset at the start of every outer iteration rather than carried over —
   don't remove that reset as an "optimisation," it's a correctness
   requirement, not redundant work.
-- **`n_inner`/`n_forward`/`n_backward` ramp across outer iterations**
+- **`n_inner`/`n_forward` ramp across outer iterations**
   (cheap+fast early, larger+more accurate late), via `ModelConfig.ramped()`.
   The zeta re-estimate is a running average weighted by each iteration's own
   `n_forward`, which happens to serve two purposes: it's the statistically
@@ -96,15 +104,28 @@ Solution/
   sizes, and it automatically makes later (larger-sample) iterations
   dominate the average once ramping is in place — don't add a second,
   separate "favour later iterations" mechanism on top of it.
-- **The optimality gap has an irreducible noise floor.** The inner loop's
-  gap check compares a deterministic bound (from `recommend_action`) against
-  a statistical bound resampled fresh every iteration
-  (`_statistical_bound`). At small `n_forward`, that resampling has enough
-  of its own confidence-interval width that the gap can look "unsteady"
-  even after real convergence — this is sampling noise, not a bug. Don't
-  chase a very tight `gap_tolerance` without also raising `n_forward`, or
-  consider making the check compare against the statistical bound's CI
-  rather than its raw point estimate.
+- **The backward pass enumerates the whole bootstrap pool — never sample
+  it.** Cuts need the exact expectation over phi_t. With sampled averages
+  (the old `n_backward`), the cut minimum picks out the estimates that came
+  out low, the bias compounds back through every stage, and the
+  deterministic bound ended up ~20–40% *below* the policy's realised value
+  — a plateaued "gap" that more iterations or more cuts only made worse.
+  Enumeration is affordable because the pool is small (~70 windows at
+  12-month periods); if it ever grows large, reduce it to a fixed finite
+  scenario set (SAA) and enumerate that, rather than resampling per cut.
+- **The inner-loop gap is signed and tested against the statistical CI.**
+  Deterministic bound (from `recommend_action`) must sit at or above the
+  statistical bound (`_statistical_bound`, resampled fresh every
+  iteration) for a maximisation; stop once it's within `gap_ci_z`
+  standard errors above the mean. The CI width is a noise floor that
+  scales as 1/sqrt(`n_forward`) — don't swap back to a fixed relative
+  tolerance (2% was unreachable at n_forward≈50) or reintroduce `abs()`,
+  which hid the invalid-cut problem above. A deterministic bound *below*
+  the CI is printed as a warning and means a bug.
+- **Keep `max_cuts_per_stage` generous.** It used to be 8, which discarded
+  nearly every cut each pass and stopped the bound from ever settling. It's
+  now a safety valve only; GLOP handled hundreds of cuts per stage without
+  needing the relax/retry fallback.
 - **The historical bootstrap is stagewise-independent**, resampled with
   replacement from overlapping rolling-window log-return sums (see
   `historical_log_returns`) — overlapping, not disjoint blocks, because the
