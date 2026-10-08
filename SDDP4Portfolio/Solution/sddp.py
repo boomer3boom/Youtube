@@ -1,22 +1,22 @@
 """SDDP-style forward/backward cutting-plane solver for the ETF portfolio
-model in readme.md, built on Google OR-Tools (GLOP linear solver).
+model in formulation.md, built on Google OR-Tools (GLOP linear solver).
 
-Departure from readme.md: h_{e,t} is carried here as *dollar value held in
-ETF e* rather than *units held*. The symbol is kept the same as readme.md
-for consistency, but the meaning differs: value-based state keeps the
-continuation value a function of the state alone (independent of the
-price level, which the unit-based version is not, once returns are
-modelled multiplicatively) and keeps every stage's cut coefficients on a
-comparable dollar scale, which turned out to matter for GLOP's numerical
-stability once cuts accumulated. Since h is dollar value here, the balance
-constraint is driven by a growth factor phi_{e,t} = P_{e,t}/P_{e,t-1}
-rather than the price P_{e,t} itself.
+State: h_{e,t} is the *dollar value held in ETF e*, not a unit count (as
+in formulation.md "State and auxiliary variables"). Value-based state keeps
+the continuation value a function of the state alone (independent of the
+price level, which a unit-based state is not, once returns are modelled
+multiplicatively) and keeps every stage's cut coefficients on a comparable
+dollar scale, which turned out to matter for GLOP's numerical stability
+once cuts accumulated. That's why the holdings balance is driven by a
+growth factor phi_{e,t} = P_{e,t}/P_{e,t-1} rather than the price itself.
 
-CVaR: rather than threading the VaR threshold zeta through the state of
-every stage (as sketched in readme.md), zeta is fixed for the duration of
-an inner SDDP solve and then updated to the empirical alpha-quantile of
-simulated terminal wealth between outer iterations -- a standard
-fixed-point simplification that keeps every stage a clean LP.
+Departure from formulation.md -- CVaR: rather than threading the VaR
+threshold zeta through the state of every stage (as sketched in
+formulation.md "Objective"), zeta is fixed for the duration of an inner
+SDDP solve and then updated to the empirical alpha-quantile of simulated
+terminal losses between outer iterations -- a standard fixed-point
+simplification that keeps every stage a clean LP. Sign convention: zeta
+is a *loss* threshold, so the VaR expressed as wealth is -zeta.
 """
 
 from typing import NamedTuple
@@ -28,7 +28,7 @@ from utils.scenarios import historical_log_returns, simulate_phi_path
 
 
 class Cut(NamedTuple):
-    """readme.md "Value function and cuts":
+    """formulation.md "Value function and cuts":
     theta_t <= q_hat + pi_h.(h - hhat) + pi_c.(C - Chat)
     (q_hat already has the trial point hhat, Chat folded in -- see SDDPSolver._build_cut)
     """
@@ -51,17 +51,17 @@ class StageResult(NamedTuple):
 
 class SDDPSolver:
     """Owns the stage-LP construction, the cut management, and the
-    forward/backward SDDP loop (readme.md "Pseudo-algorithm").
+    forward/backward SDDP loop (formulation.md "Pseudo-algorithm").
     """
 
     def __init__(self, universe, config, rng=None):
         self.universe = universe
         self.config = config
         self.rng = rng or np.random.default_rng(7)
-        self.rho = {}        # readme.md: RHO_{e,t}, set at the start of run()
-        self.gamma = {}      # readme.md: gamma_e, set at the start of run()
-        self.zeta = 0.0       # readme.md: zeta
-        self.cuts = {}        # t -> list[Cut], readme.md: Theta_t
+        self.rho = {}        # formulation.md: rho_{e,t}, set at the start of run()
+        self.gamma = {}      # formulation.md: gamma_e, set at the start of run()
+        self.zeta = 0.0       # formulation.md: zeta
+        self.cuts = {}        # t -> list[Cut], formulation.md: Theta_t
 
     # ------------------------------------------------------------------ #
     # Stage LP (h carried as dollar value, see module docstring)
@@ -93,13 +93,13 @@ class SDDPSolver:
         solver = pywraplp.Solver.CreateSolver("GLOP")
         inf = solver.infinity()
 
-        b = {e: solver.NumVar(0, inf, f"b_{e}") for e in e_set}  # readme.md: b_{e,t}
-        u = {e: solver.NumVar(0, inf, f"u_{e}") for e in e_set}  # readme.md: u_{e,t}
-        h = {e: solver.NumVar(0, inf, f"h_{e}") for e in e_set}  # readme.md: h_{e,t} (dollar value)
-        c = solver.NumVar(0, inf, "C")                           # readme.md: C_t
-        v = solver.NumVar(0, inf, "V")                           # readme.md: V_t
+        b = {e: solver.NumVar(0, inf, f"b_{e}") for e in e_set}  # formulation.md: b_{e,t}
+        u = {e: solver.NumVar(0, inf, f"u_{e}") for e in e_set}  # formulation.md: u_{e,t}
+        h = {e: solver.NumVar(0, inf, f"h_{e}") for e in e_set}  # formulation.md: h_{e,t} (dollar value)
+        c = solver.NumVar(0, inf, "C")                           # formulation.md: C_t
+        v = solver.NumVar(0, inf, "V")                           # formulation.md: V_t
 
-        # Holdings balance (readme.md "Constraints -> Holdings balance"):
+        # Holdings balance (formulation.md "Constraints -> Holdings balance"):
         #   h_{e,t} = phi_{e,t} h_{e,t-1} + b_{e,t} - u_{e,t}
         bal_h = {}
         for e in e_set:
@@ -107,7 +107,7 @@ class SDDPSolver:
             rhs = phi_t[e] * h_prev[e] + b[e] - u[e]
             bal_h[e] = solver.Add(lhs == rhs, f"bal_h_{e}")
 
-        # Cash balance (readme.md "Constraints -> Cash balance"):
+        # Cash balance (formulation.md "Constraints -> Cash balance"):
         #   C_t = C_{t-1} + sum_e h_{e,t-1} gamma_e
         #         - sum_e b_{e,t}(1+kappa^buy) + sum_e u_{e,t}(1-kappa^sell)
         # The gamma_e term is the Australian dividend imputation (franking
@@ -122,27 +122,27 @@ class SDDPSolver:
                + sum(u[e] * (1 - cfg.kappa_sell) for e in e_set))
         bal_c = solver.Add(lhs == rhs, "bal_C")
 
-        # Total portfolio value (readme.md "State and auxiliary variables"):
+        # Total portfolio value (formulation.md "State and auxiliary variables"):
         #   V_t = C_t + sum_e h_{e,t}   (h already in dollars here, so no P_{e,t} factor)
         lhs = v
         rhs = c + sum(h[e] for e in e_set)
         solver.Add(lhs == rhs, "def_V")
 
-        # Single-holding cap (readme.md "Constraints -> Single-holding cap"):
+        # Single-holding cap (formulation.md "Constraints -> Single-holding cap"):
         #   h_{e,t} <= w-bar * V_t
         for e in e_set:
             lhs = h[e]
             rhs = cfg.w_bar * v
             solver.Add(lhs <= rhs, f"cap_{e}")
 
-        # Geographic look-through limit (readme.md "Constraints -> Geographic
+        # Geographic look-through limit (formulation.md "Constraints -> Geographic
         # and sector look-through limits"): sum_e h_{e,t} L^G_{e,g} <= theta-bar^G_g * V_t
         for g in universe.regions:
             lhs = sum(universe.geo[e].get(g, 0.0) * h[e] for e in e_set)
             rhs = cfg.theta_g_bar * v
             solver.Add(lhs <= rhs, f"geo_{g}")
 
-        # Geographic minimums (readme.md "Constraints -> Geographic minimums"):
+        # Geographic minimums (formulation.md "Constraints -> Geographic minimums"):
         #   sum_e h_{e,t} L^G_{e,g} >= theta-underline^G_g * V_t, only for
         #   regions given a minimum in config.theta_g_min. Involves no
         #   incoming state, so no cut subgradient needs to account for it.
@@ -151,14 +151,14 @@ class SDDPSolver:
             rhs = minimum * v
             solver.Add(lhs >= rhs, f"geo_min_{g}")
 
-        # Sector look-through limit (readme.md "Constraints -> Geographic
+        # Sector look-through limit (formulation.md "Constraints -> Geographic
         # and sector look-through limits"): sum_e h_{e,t} L^S_{e,s} <= theta-bar^S_s * V_t
         for s in universe.sectors:
             lhs = sum(universe.sector[e].get(s, 0.0) * h[e] for e in e_set)
             rhs = cfg.theta_s_bar * v
             solver.Add(lhs <= rhs, f"sec_{s}")
 
-        # Valuation gate (readme.md "Constraints -> Valuation gate"):
+        # Valuation gate (formulation.md "Constraints -> Valuation gate"):
         #   b_{e,t} <= M * rho_{e,t}
         for e in e_set:
             lhs = b[e]
@@ -169,13 +169,13 @@ class SDDPSolver:
         objective.SetMaximization()
 
         if terminal:
-            # Objective (readme.md "Objective"): mean-CVaR via the
+            # Objective (formulation.md "Objective"): mean-CVaR via the
             # Rockafellar-Uryasev linearisation, evaluated on this path's
             # terminal wealth W_T = V_T.
             #   max (1-lambda) E[W_T] - lambda(zeta + 1/(1-alpha) E[eta])
-            # CVaR shortfall constraint (readme.md "Objective"):
+            # CVaR shortfall constraint (formulation.md "Objective"):
             #   eta_omega >= -W_T(omega) - zeta, eta_omega >= 0
-            eta = solver.NumVar(0, inf, "eta")  # readme.md: eta_omega
+            eta = solver.NumVar(0, inf, "eta")  # formulation.md: eta_omega
             lhs = eta + v
             rhs = -self.zeta
             solver.Add(lhs >= rhs, "cvar_shortfall")
@@ -185,16 +185,16 @@ class SDDPSolver:
             # for this solve), but leaving it out would mean objective.Value()
             # -- and therefore every cut and deterministic bound built from
             # it -- reports a value that's a constant offset away from the
-            # true readme.md objective. Adding it back keeps those numbers
+            # true formulation.md objective. Adding it back keeps those numbers
             # directly comparable to _statistical_bound()'s.
             objective.SetOffset(-cfg.lambda_ * self.zeta)
         else:
-            # Value function and cuts (readme.md "Value function and cuts"):
+            # Value function and cuts (formulation.md "Value function and cuts"):
             #   theta_t <= q_hat + pi_h.(h - hhat) + pi_c.(C - Chat)
             # theta_t approximates the continuation value Q_{t+1}(x_t), x_t=(h,C).
             # q_hat already has the trial point folded in by _build_cut(), so
             # this reads exactly theta <= q_hat + pi_h.(h-hhat) + pi_c.(C-Chat).
-            theta = solver.NumVar(-inf, cfg.theta_upper_bound, "theta")  # readme.md: theta_t
+            theta = solver.NumVar(-inf, cfg.theta_upper_bound, "theta")  # formulation.md: theta_t
             for cut in cuts:
                 lhs = theta
                 rhs = cut.q_hat + _relax + sum(cut.pi_h[e] * h[e] for e in e_set) + cut.pi_c * c
@@ -290,14 +290,14 @@ class SDDPSolver:
             self.cuts[stage] = stage_cuts[-self.config.max_cuts_per_stage:]
 
     # ------------------------------------------------------------------ #
-    # SDDP loop (readme.md "Pseudo-algorithm")
+    # SDDP loop (formulation.md "Pseudo-algorithm")
     # ------------------------------------------------------------------ #
 
     def _statistical_bound(self, terminal_values):
         """Sample mean and standard error of the realized mean-CVaR
-        objective (readme.md "Objective") at the current zeta, evaluated
+        objective (formulation.md "Objective") at the current zeta, evaluated
         over the forward pass's simulated terminal wealth outcomes. This
-        is the "statistical bound" in readme.md's "Pseudo-algorithm" --
+        is the "statistical bound" in formulation.md's "Pseudo-algorithm" --
         an estimate of the value actually achieved by the current policy,
         as opposed to the cuts' (optimistic) approximation of it.
         """
@@ -314,7 +314,7 @@ class SDDPSolver:
         be met -- otherwise the first stage LP fails deep inside run() with
         a bare solver status. Checking the all-cash root state is enough:
         selling is unrestricted and every limit scales with V, so any later
-        state can sell down and reach whatever the root could (readme.md
+        state can sell down and reach whatever the root could (formulation.md
         "Constraints -> Geographic minimums").
         """
         minimums = self.config.theta_g_min
@@ -339,7 +339,7 @@ class SDDPSolver:
                 f"add an ETF with more exposure to those regions.") from None
 
     def run(self, prices_hist, T, verbose=True):
-        """Run the SDDP loop (readme.md "Pseudo-algorithm").
+        """Run the SDDP loop (formulation.md "Pseudo-algorithm").
 
         All iteration counts and tolerances come from self.config -- see
         config.py to change them.
@@ -361,7 +361,7 @@ class SDDPSolver:
         gap_ci_z=None in config.py to always run the full (ramped) n_inner
         iterations instead.
 
-        config.n_outer is a cap on the number of times zeta (readme.md's
+        config.n_outer is a cap on the number of times zeta (formulation.md's
         CVaR threshold) gets re-estimated. Rather than trusting each
         iteration's fresh quantile estimate on its own, zeta is tracked as
         a running average across outer iterations weighted by each
@@ -385,7 +385,7 @@ class SDDPSolver:
         e_set = self.universe.etfs
         returns = historical_log_returns(prices_hist, self.config.months_per_period)
         # Backward-pass scenario set: every joint growth-factor vector in
-        # the bootstrap pool, each equally likely (readme.md: Omega_t, the
+        # the bootstrap pool, each equally likely (formulation.md: Omega_t, the
         # same at every stage under the stagewise-independent bootstrap).
         scenarios = [dict(zip(e_set, phi)) for phi in np.exp(returns)]
         pe = self.universe.fetch_pe()
@@ -442,7 +442,7 @@ class SDDPSolver:
 
                 terminal_values = [sum(states[T][0].values()) + states[T][1] for states in trial_states]
 
-                # ---- convergence check (readme.md "Pseudo-algorithm") ----
+                # ---- convergence check (formulation.md "Pseudo-algorithm") ----
                 deterministic_bound = self.recommend_action(T).obj
                 statistical_mean, statistical_se = self._statistical_bound(terminal_values)
                 ci_half_width = ci_z * statistical_se
@@ -550,7 +550,7 @@ class SDDPSolver:
 
     def recommend_action(self, T):
         """The concrete trade recommended right now: solve period 1's LP
-        from the actual root state (all cash, readme.md: h_{e,0}=0,
+        from the actual root state (all cash, formulation.md: h_{e,0}=0,
         C_0=c0) using whatever cuts run() has learned for that stage.
 
         Because the incoming state is all-cash, the growth factor phi_t

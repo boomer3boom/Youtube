@@ -1,9 +1,22 @@
-# Documentation (for a mathematician)
+# How the model is solved and validated
 
-Short companion to [formulation.md](formulation.md): how the model is
-actually solved and validated. Doesn't restate sets/variables/objective —
-only the numerical machinery in `Solution/sddp.py` and
-`Solution/utils/scenarios.py`.
+Short companion to [formulation.md](formulation.md), written for someone
+comfortable with the maths: how the model is actually solved and validated.
+It doesn't restate the sets, variables or objective. It covers only the
+numerical machinery in `Solution/sddp.py` and `Solution/utils/scenarios.py`,
+and where it departs from formulation.md. For setup and running, see
+[readme.md](readme.md).
+
+## Where the code departs from formulation.md
+
+| formulation.md | Code | Why |
+|---|---|---|
+| $\zeta$ is a decision variable, carried through the state | $\zeta$ fixed per outer iteration, re-estimated as an empirical quantile in between (see "CVaR" below) | Keeps every stage a plain LP |
+| $h_{e,0}$, $C_0$ = the investor's actual portfolio | Always all cash: $h_{e,0}=0$, $C_0$ = `c0` | No input path for an existing portfolio yet |
+| $PE_{e,t}$ varies with $t$ | Today's trailing PE, constant over the horizon, so $\rho_e$ is too | No historical PE series readily available |
+| $L^{G}_{e,g}$ sums to 1 per ETF | Same, with unattributed holdings in an "Other" region that is capped and given a minimum like any other | Funds' published breakdowns don't attribute everything |
+| Valuation gate uses big-$M$ | $M$ = `big_m_multiplier` × `c0` | Any value well above a feasible trade works |
+| $\theta_t$ unbounded before cuts exist | $\theta_t \le$ `theta_upper_multiplier` × `c0` | Keeps the first iteration's LPs bounded |
 
 ## Simulation: stagewise-independent bootstrap
 
@@ -16,7 +29,7 @@ only the numerical machinery in `Solution/sddp.py` and
 - For a $k$-month period, returns are summed over **overlapping** rolling
   $k$-month windows, not disjoint blocks — the shortest-history ETF in the
   universe leaves too few disjoint blocks (~6-7) to bootstrap from at
-  $k=12$; overlapping windows give ~69, at the cost of adjacent windows
+  $k=12$; overlapping windows give ~70, at the cost of adjacent windows
   sharing $k-1$ months (not independent of each other). Raises `ValueError`
   if fewer than 2 windows exist.
 - No tail extrapolation: simulated outcomes can't exceed the convex hull of
@@ -106,7 +119,8 @@ No automated test suite exists (no `test_*.py`). Validation so far:
    distribution — no momentum, mean reversion, or regime switching.
 2. No drift in the return-generating process over the horizon.
 3. CVaR uses a fixed-$\zeta$-per-outer-iteration relaxation, not
-   formulation.md's fully time-consistent state-augmented version.
+   formulation.md's state-augmented version (neither is time-consistent;
+   see formulation.md "Objective").
 4. Convergence is judged against sampling-noise-bounded estimates, not an
    exact certificate.
 5. Validated by manual cross-checks and sanity runs, not automated tests.

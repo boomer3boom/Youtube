@@ -42,7 +42,7 @@ def historical_log_returns(prices, months_per_period=1):
 
 def sample_growth_factors(returns, n, rng):
     """Bootstrap n joint growth-factor vectors phi_{e,t} = P_{e,t}/P_{e,t-1}
-    from history (readme.md: phi_{e,t})."""
+    from history (formulation.md: phi_{e,t})."""
     idx = rng.integers(0, len(returns), size=n)
     return np.exp(returns[idx])
 

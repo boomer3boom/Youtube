@@ -1,7 +1,7 @@
 """The ETF universe: tickers, currency handling, look-through exposure data,
 and price/PE retrieval.
 
-Everything here corresponds to readme.md's sets and data: E (ETFs), G
+Everything here corresponds to formulation.md's sets and data: E (ETFs), G
 (regions), S (sectors/themes), L_G, L_S and PE. Centralising it in one
 class (rather than a handful of module-level dicts) is what lets
 formulation.py and sddp.py both refer to "the universe" instead of each
@@ -13,32 +13,32 @@ import yfinance as yf
 
 
 class ETFUniverse:
-    """readme.md: E, G, S, L_G, L_S, PE."""
+    """formulation.md: E, G, S, L_G, L_S, PE."""
 
     def __init__(self, ticker_map, usd_tickers, geo, pe_fallback):
         self.ticker_map = ticker_map    # label -> yfinance ticker
         self.usd_tickers = usd_tickers  # labels priced in USD, converted to AUD
-        self.geo = geo                  # readme.md: L^G_{e,g}, label -> {region: weight}
+        self.geo = geo                  # formulation.md: L^G_{e,g}, label -> {region: weight}
         self.pe_fallback = pe_fallback  # label -> fallback PE if the live fetch fails
-        self.sector = {}                # readme.md: L^S_{e,s}, populated by fetch_sector_weightings()
+        self.sector = {}                # formulation.md: L^S_{e,s}, populated by fetch_sector_weightings()
 
     @property
     def etfs(self):
-        """readme.md: E, the universe of investable ETFs."""
+        """formulation.md: E, the universe of investable ETFs."""
         return list(self.ticker_map.keys())
 
     @property
     def regions(self):
-        """readme.md: G, geographic regions ETF holdings look through to."""
+        """formulation.md: G, geographic regions ETF holdings look through to."""
         return sorted({g for exposure in self.geo.values() for g in exposure})
 
     @property
     def sectors(self):
-        """readme.md: S, sectors/themes ETF holdings look through to."""
+        """formulation.md: S, sectors/themes ETF holdings look through to."""
         return sorted({s for exposure in self.sector.values() for s in exposure})
 
     def franking_credit_yields(self, gamma_au_per_period):
-        """readme.md: gamma_e = L^G_{e,Australia} * gamma^AU.
+        """formulation.md: gamma_e = L^G_{e,Australia} * gamma^AU.
 
         Franking credits are only worth something to an Australian
         resident taxpayer, and only accrue on the Australian-equity slice
@@ -52,7 +52,7 @@ class ETFUniverse:
         return {e: self.geo[e].get("Australia", 0.0) * gamma_au_per_period for e in self.etfs}
 
     def fetch_prices(self, period="8y"):
-        """readme.md: P_{e,t}, all converted to a single currency (AUD)."""
+        """formulation.md: P_{e,t}, all converted to a single currency (AUD)."""
         yf_tickers = list(dict.fromkeys(list(self.ticker_map.values()) + ["AUDUSD=X"]))
         raw = yf.download(yf_tickers, period=period, interval="1mo", progress=False)["Close"]
         raw = raw.dropna(how="all").ffill().dropna()
@@ -63,7 +63,7 @@ class ETFUniverse:
         return prices.dropna()
 
     def fetch_sector_weightings(self):
-        """readme.md: L^S_{e,s}, fetched live from yfinance's fund sector
+        """formulation.md: L^S_{e,s}, fetched live from yfinance's fund sector
         breakdown (`Ticker.funds_data.sector_weightings`). Unlike the
         geographic look-through data (L_G, still hand-typed -- Yahoo simply
         doesn't expose a country/region breakdown for these funds), sector
@@ -93,7 +93,7 @@ class ETFUniverse:
         return sector
 
     def fetch_pe(self):
-        """readme.md: PE_{e,t}, fetched live but held constant across the
+        """formulation.md: PE_{e,t}, fetched live but held constant across the
         horizon since a genuine historical PE time series isn't readily
         available for these tickers.
         """
@@ -108,7 +108,7 @@ class ETFUniverse:
         return pe
 
     def eligibility(self, pe, pe_lower, pe_upper):
-        """readme.md: RHO_{e,t} = 1 iff PE-underline <= PE_{e,t} <= PE-overline."""
+        """formulation.md: rho_{e,t} = 1 iff PE-underline <= PE_{e,t} <= PE-overline."""
         return {e: 1.0 if pe_lower <= pe[e] <= pe_upper else 0.0 for e in self.etfs}
 
     @classmethod
@@ -137,10 +137,12 @@ class ETFUniverse:
         IEM.ASX are their earlier country-level estimates (reused from
         Stock-Stochastic/CVar/StockWithCVar.py) summed by continent,
         geographically (Mexico in North America, Saudi Arabia in Asia);
-        each leaves ~7-8% unattributed, which counts towards no region's
-        limit. QLTY.ASX (BetaShares Global Quality Leaders, global
-        ex-Australia, unhedged) is BetaShares' published country allocation
-        as at 31/08/2026 summed by continent, with 3% "other" unattributed;
+        the ~8-12% left unattributed goes into an "Other" region, which is
+        a region like any other: it's capped by theta_g_bar and can be
+        given a minimum in config.theta_g_min. QLTY.ASX (BetaShares Global
+        Quality Leaders, global ex-Australia, unhedged) is BetaShares'
+        published country allocation as at 31/08/2026 summed by continent,
+        with 3% in "Other";
         ESTX.ASX (Global X EURO STOXX 50) is all Eurozone. The rest are
         single-region funds. Both QLTY.ASX (listed 2018) and ESTX.ASX
         (2016) predate DHHF.ASX, so adding them doesn't shorten the

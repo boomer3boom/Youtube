@@ -1,0 +1,6 @@
+# Versions the project was last run and checked with (08/10/2026).
+# Python 3.11.
+ortools==9.15.6755
+numpy==2.4.6
+pandas==3.0.5
+yfinance==1.7.0

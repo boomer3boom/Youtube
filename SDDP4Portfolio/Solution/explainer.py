@@ -134,7 +134,7 @@ class PortfolioExplainer:
         return pd.Series(w * (self.cov @ w) / var_p, index=self.w.index)
 
     def region_exposure(self):
-        """readme.md: theta^G_g / V for the recommended allocation."""
+        """formulation.md: theta^G_g / V for the recommended allocation."""
         exposure = {g: sum(self.w[e] * self.universe.geo[e].get(g, 0.0) for e in self.universe.etfs)
                     for g in self.universe.regions}
         return pd.Series(exposure, dtype=float).sort_values(ascending=False)

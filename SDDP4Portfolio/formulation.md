@@ -1,6 +1,22 @@
-# ETF Portfolio Optimisation
+# ETF Portfolio Optimisation — Mathematical Formulation
 
-This is a repo that stores my project on using SDDP to try and solve investment portfolio problem. I attempt to using CVAR and benchmark my solution against S and P 500 over turbulent and stable years. Below I outline the problem statement and the OR solution to this problem.
+The mathematical model behind this project: the problem statement, sets,
+data, variables, the mean-CVaR objective, every constraint, the cut-based
+value-function approximation, and a pseudo-algorithm for solving it with
+Stochastic Dual Dynamic Programming (SDDP).
+
+Companion documents:
+
+- [readme.md](readme.md) — how to set up and run the code, and what it prints.
+- [documentation.md](documentation.md) — how the code actually solves and
+  validates this model: the bootstrap, the cut machinery, the outer/inner
+  loops, the convergence tests, and where the implementation departs from
+  this document.
+
+Code in `Solution/` uses the same symbols as this document (`b`, `u`, `h`,
+`C`, `V`, `zeta`, `eta`, `rho`, `gamma`, `phi`, ...), and comments in
+`Solution/sddp.py` name the constraint each block implements (e.g.
+"Holdings balance"), so the two can be read side by side.
 
 ## Problem Overview
 
@@ -53,8 +69,8 @@ sector, and valuation limits at every review point.
 |---|---|
 | $\mathcal{E}$ | Universe of investable ETFs, indexed by $e$ |
 | $\mathcal{T} = \{0, 1, \dots, T\}$ | Review points (time periods) over the investment horizon, indexed by $t$ |
-| $\mathcal{G}$ | Geographic regions (continents: North America, South America, Europe, Asia, Africa, Australia) that ETF holdings can be attributed to, indexed by $g$ |
-| $\mathcal{S}$ | Sectors / themes that ETF holdings can be attributed to, indexed by $s$ |
+| $\mathcal{G}$ | Geographic regions (continents: North America, South America, Europe, Asia, Africa, Australia, plus an "Other" bucket for holdings a fund's published breakdown doesn't attribute) that ETF holdings can be attributed to, indexed by $g$. In the code, $\mathcal{G}$ is whichever regions appear in the universe's look-through data |
+| $\mathcal{S}$ | Sectors / themes that ETF holdings can be attributed to, indexed by $s$ (in the code, the sector names Yahoo Finance publishes for each fund) |
 
 ## Data
 
@@ -77,7 +93,7 @@ sector, and valuation limits at every review point.
 
 | Symbol | Description |
 |---|---|
-| $PE_{e,t}$ | Price-to-earnings ratio of ETF $e$ at review point $t$ |
+| $PE_{e,t}$ | Price-to-earnings ratio of ETF $e$ at review point $t$ (in the code, today's trailing PE is fetched once and held constant over the horizon, since no historical PE series is readily available) |
 | $\underline{PE}, \overline{PE}$ | Lower and upper bounds on an acceptable price-to-earnings ratio |
 
 **Costs and limits**
@@ -133,9 +149,9 @@ at that review point.
 | $C_t \ge 0$ | Cash balance at the end of period $t$ (state variable) |
 | $V_t = C_t + \sum_{e \in \mathcal{E}} h_{e,t}$ | Total portfolio value at $t$ |
 | $x_t = (h_{\cdot,t}, C_t)$ | State vector carried from period $t$ into period $t+1$ |
-| $\zeta$ | Value-at-Risk (VaR) threshold at confidence level $\alpha$ — the wealth level below which only the worst $1-\alpha$ fraction of outcomes fall. It is not fixed data; the optimiser solves for it alongside the trading decisions, and it anchors the CVaR term in the objective (auxiliary variable) |
-| $\eta_\omega \ge 0$ | Shortfall of path $\omega$ below $\zeta$ (auxiliary variable) |
-| $\theta_t$ | The estimated value for the benders cut $t$ |
+| $\zeta$ | Value-at-Risk (VaR) threshold at confidence level $\alpha$, expressed as a **loss** (negative wealth): only the worst $1-\alpha$ fraction of outcomes have a loss $-W_T$ above $\zeta$, so the VaR as a wealth level is $-\zeta$. It is not fixed data; the optimiser solves for it alongside the trading decisions, and it anchors the CVaR term in the objective (auxiliary variable). The code finds it by fixed-point iteration instead — see the note under "Objective" |
+| $\eta_\omega \ge 0$ | Shortfall of path $\omega$: how far its loss exceeds $\zeta$ (auxiliary variable) |
+| $\theta_t$ | Approximation of the expected value-to-go from the end of period $t$ onwards, bounded above by the Benders cuts (see "Value function and cuts"). Not related to the look-through limits $\overline{\theta}^{G}_{g}$, $\overline{\theta}^{S}_{s}$, which share the letter |
 
 $h_{e,t}$ is deliberately carried as **dollar value** rather than units.
 The two are equivalent, but dollar value keeps the continuation value a
@@ -166,8 +182,8 @@ $$
 
 $\lambda = 0$ recovers a purely expected-wealth objective; $\lambda \to 1$
 drives the policy towards protecting the worst $1-\alpha$ tail of
-outcomes — this is the lever used later to benchmark the "stable years"
-vs "turbulent years" behaviour against the S&P 500.
+outcomes. This is the main lever for how defensive the policy is
+(`lambda_` in `Solution/config.py`).
 
 *Note:* $\zeta$ is a single quantity shared by every path, not something
 that varies period to period, so it is carried forward unchanged as an
@@ -176,8 +192,16 @@ balance) purely so the terminal-stage subproblem can still reference it.
 This keeps the recursion below valid, though it is worth being upfront
 that a terminal CVaR handled this way is not fully *time-consistent* in
 the dynamic-programming sense — a Markovian, per-stage (nested) risk
-measure would be needed for that. For benchmarking a single fixed
-horizon against the S&P 500 this simpler version is sufficient.
+measure would be needed for that. For evaluating a single fixed horizon
+this simpler version is sufficient.
+
+*Implementation note:* the code does not carry $\zeta$ as a state
+variable. It fixes $\zeta$ for an entire SDDP solve, then re-estimates it
+as the empirical $\alpha$-quantile of simulated losses and solves again,
+until $\zeta$ stops moving (the "outer loop" in the pseudo-algorithm
+below). Each stage stays a plain LP; the cost is that every cut is only
+valid for the $\zeta$ it was built under, so cuts are discarded whenever
+$\zeta$ changes. See [documentation.md](documentation.md).
 
 ### Constraints
 
@@ -247,6 +271,8 @@ $$
 
 together with $b_{e,t}, u_{e,t}, h_{e,t}, C_t \ge 0$ and, at $t=0$,
 $h_{e,0}$ and $C_0$ fixed to the investor's actual starting portfolio.
+(The code currently always starts from all cash: $h_{e,0}=0$,
+$C_0 = $ `c0`.)
 
 No explicit constraint is needed to stop the model from buying and
 selling the same ETF in the same period — with $\kappa^{buy}, \kappa^{sell} > 0$,
@@ -266,9 +292,15 @@ $$
 Q_t(x_{t-1}, \phi_t) = \max_{b_t,\, u_t,\, h_t,\, C_t} \Big\{ \text{(period-$t$ contribution)} + \theta_t \Big\}
 $$
 
-subject to the balance, exposure, valuation and cap constraints above,
-plus cuts approximating the expected value-to-go (that is, we need to apply the t+1 cut onto t)
-$\mathcal{Q}_{t+1}(x_t) = \mathbb{E}_{\phi_{t+1}}[\,Q_{t+1}(x_t, \phi_{t+1})\,]$:
+The period-$t$ contribution is zero for $t < T$: nothing is consumed along
+the way, so every intermediate stage simply maximises $\theta_t$. At
+$t = T$ there is no $\theta_T$; the contribution is the objective above
+evaluated on this path, $(1-\lambda) W_T - \lambda\left(\zeta + \frac{\eta}{1-\alpha}\right)$.
+
+The maximisation is subject to the balance, exposure, valuation and cap
+constraints above, plus cuts approximating the expected value-to-go
+$\mathcal{Q}_{t+1}(x_t) = \mathbb{E}_{\phi_{t+1}}[\,Q_{t+1}(x_t, \phi_{t+1})\,]$.
+Cuts built from period $t+1$'s problem are added to period $t$'s problem:
 
 $$
 \theta_t \le \hat{Q}_{t+1}^{(k)} + \bar{\pi}_{t+1}^{(k)} \cdot \left(x_t - \hat{x}_t^{(k)}\right), \qquad k = 1,\dots,K
@@ -305,49 +337,59 @@ enumerate in full.
 
 ### Pseudo-algorithm
 
+This is the algorithm as implemented in `SDDPSolver.run()`
+(`Solution/sddp.py`). Snake-case names (`n_outer`, `gap_ci_z`, `c0`, ...)
+are fields of `ModelConfig` (`Solution/config.py`). The outer loop exists only because of how the code
+handles $\zeta$ (see the implementation note under "Objective"). The inner
+loop is standard SDDP.
+
 ```
-initialise: cut sets Θ_t ← ∅ for t = 1..T
-initialise: x_0 ← investor's actual starting holdings and cash
-k ← 0
+Ω     ← every joint growth-factor vector in the historical bootstrap pool
+         (one per overlapping rolling window, equally likely, same at every t)
+x_0   ← all cash: h_{e,0} = 0, C_0 = c0
+ζ     ← 0
 
-repeat
-    k ← k + 1
+for outer = 0 .. n_outer-1:                          # ---- outer loop: fix ζ ----
+    n_inner, n_forward ← ramped from *_start to *_end as outer increases
+    Θ_t ← ∅ for every t                              # cuts are only valid for one ζ
 
-    # ---- forward pass ----
-    sample a set of growth-factor paths {ω} over t = 1..T
-    for each sampled path ω:
-        for t = 1..T:
-            solve stage-t problem Q_t(x_{t-1}(ω), φ_t(ω)) using
-                the current cuts Θ_t as an approximation of θ_t
-            record trial state  x_t(ω)  and stage contribution
-    compute a statistical estimate (mean ± z·SE) of total objective
-        across sampled paths            -> statistical bound
-    read the root-stage objective (t = 0, with all current cuts)
-                                         -> deterministic (upper) bound
+    for inner = 0 .. n_inner-1:                      # ---- inner loop: SDDP ----
 
-    # ---- convergence check ----
-    # The deterministic bound is exact given the cuts; the statistical
-    # bound is a Monte Carlo estimate. Stop once the former is
-    # indistinguishable from the latter at confidence level z.
-    if deterministic bound ≤ statistical mean + z·SE or k = k_max:
-        break
+        # forward pass
+        draw n_forward paths, each T growth-factor vectors sampled from Ω
+                with replacement
+        for each path ω, for t = 1..T:
+            solve stage-t LP from x_{t-1}(ω) with φ_t(ω) and cuts Θ_t
+            record trial state x_t(ω)
+        statistical bound   ← mean ± z·SE of the realised objective
+                              (1-λ)W_T − λ(ζ + η/(1−α)) over the n_forward paths
+        deterministic bound ← objective of the period-1 LP solved from x_0
+                              with cuts Θ_1 (an upper bound if the cuts are valid)
 
-    # ---- backward pass ----
-    for t = T down to 1:
-        for each distinct trial state x_{t-1}(ω) visited above:
-            for each growth-factor realisation φ_t in Ω_t (all of them,
-                    never a sample -- see "Value function and cuts"):
-                fix incoming state to x_{t-1}(ω)
-                solve stage-t problem -> optimal value, dual prices
-            average the values and duals across realisations
-            build one new cut from the averages
-            add the cut to Θ_{t-1}
+        # convergence check (z = gap_ci_z)
+        if deterministic bound ≤ statistical mean + z·SE:
+            break                                    # gap is within sampling noise
 
-until convergence
+        # backward pass
+        for t = T down to 2:
+            for each distinct trial state x_{t-1}(ω) from the forward pass:
+                for every φ in Ω (enumerate, never sample):
+                    solve stage-t LP from x_{t-1}(ω) with φ and cuts Θ_t
+                    -> optimal value, duals on the incoming state
+                average values and duals over Ω -> one cut
+                add the cut to Θ_{t-1} (skip near-duplicates)
 
-output: cut sets {Θ_t} defining the value-to-go approximation
-output: simulate forward once more with fixed cuts (in-sample and
-         out-of-sample price paths, including the S&P 500 comparison
-         window) to obtain realised buy/sell/hold decisions and
-         portfolio performance
+    # re-estimate ζ
+    ζ_sample ← α-quantile of the losses −W_T from the last forward pass
+    ζ_new    ← running average of ζ_sample over outer iterations,
+               weighted by each iteration's n_forward
+    if outer > 0 and |ζ_new − ζ| / |ζ| ≤ zeta_tolerance: break
+    if this is the last outer iteration:  break      # keep ζ that matches Θ
+    ζ ← ζ_new
+
+output: ζ and the cut sets Θ_t built under it
+output: terminal-wealth distribution of the last forward pass, compared with
+        a buy-and-hold position in benchmark_ticker over the same horizon
+output: today's recommended trade = the period-1 LP solved from x_0
+        with Θ_1, explained in plain English by PortfolioExplainer
 ```

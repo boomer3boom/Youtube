@@ -15,10 +15,19 @@ constraint names (e.g. "Holdings balance", "Cash balance") and variable
 symbols directly, and any change to the model's economics belongs there
 first, code second.
 
-Note: the original readme content now lives in `formulation.md` (renamed by
-an earlier commit); `readme.md` is the project's usage-oriented entry point
-instead. Keep that split — put maths in formulation.md, put setup/usage in
-readme.md.
+Documentation is split three ways — keep it that way:
+
+- `formulation.md` — the maths (the model as specified).
+- `documentation.md` — how the code solves and validates that model, and
+  a table of every place the code departs from formulation.md. If you add
+  a departure, add a row there.
+- `readme.md` — setup, usage, output, code walkthrough, troubleshooting.
+
+formulation.md used to be called readme.md, so older commits' comments
+may say "readme.md" when they mean the maths. Code comments have since
+been updated to say formulation.md.
+
+The project was wrapped up on 8 October 2026; nothing is in progress.
 
 ## Layout
 
@@ -144,9 +153,11 @@ Solution/
 
 ## Environment
 
-Conda env `SDDP` (Python 3.11): `ortools`, `numpy`, `pandas`, `yfinance`,
-`matplotlib`, `scipy`. Run everything from inside `Solution/` (imports are
-flat, not package-relative).
+Conda env `SDDP` (Python 3.11), created from `environment.yml`. Pinned
+dependencies (`ortools`, `numpy`, `pandas`, `yfinance`) live in
+`requirements.txt` only; `environment.yml` installs them via `-r`, so
+add or bump a dependency there, not in both. Run everything from inside
+`Solution/` (imports are flat, not package-relative).
 
 ## Notes
 

@@ -1,6 +1,6 @@
 """Entry point: builds the ETF universe, fetches price history, runs the
 SDDP solver, and reports policy performance against a buy-and-hold
-benchmark. See readme.md for the full mathematical model, universe.py for
+benchmark. See formulation.md for the full mathematical model, universe.py for
 the ETF/ticker data, and sddp.py for the solver itself.
 """
 
@@ -26,7 +26,7 @@ def main():
     universe.fetch_sector_weightings()
 
     solver = SDDPSolver(universe, config)
-    T = config.horizon_periods  # readme.md: T -- horizon_years worth of months_per_period-month periods
+    T = config.horizon_periods  # formulation.md: T -- horizon_years worth of months_per_period-month periods
     print(f"Horizon: {T} periods of {config.months_per_period} months "
           f"({config.horizon_years:.0f} years)")
 

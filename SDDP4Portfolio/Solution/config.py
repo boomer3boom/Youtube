@@ -4,11 +4,15 @@ Other files (formulation.py, sddp.py, universe.py) read from a ModelConfig
 instance rather than defining their own defaults -- if you want to change
 how the model behaves, this is the only file you should need to edit.
 
-Sections below: readme.md Data/Parameters (the mathematical model itself),
-SDDP run controls (iteration caps and convergence tolerances), reporting
-(the buy-and-hold benchmark), and solver-internal engineering constants
-(numerical robustness knobs with no readme.md counterpart -- see sddp.py
+Sections below: formulation.md Data/Parameters (the mathematical model itself),
+run configuration (horizon and period length), SDDP run controls (iteration
+caps and convergence tolerances), reporting (the buy-and-hold benchmark and
+the explainer's role thresholds), and solver-internal engineering constants
+(numerical robustness knobs with no formulation.md counterpart -- see sddp.py
 for why each one exists).
+
+The ETF universe itself (tickers, currencies, look-through weights) is not
+here: it lives in universe.py's ETFUniverse.default().
 """
 
 from dataclasses import dataclass, field
@@ -17,25 +21,25 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class ModelConfig:
     # ------------------------------------------------------------------ #
-    # readme.md "Data" and "Parameters"
+    # formulation.md "Data" and "Parameters"
     # ------------------------------------------------------------------ #
-    w_bar: float = 0.35             # readme.md: w-bar, max weight in a single ETF
-    theta_g_bar: float = 0.60       # readme.md: theta-bar^G_g, max region exposure
+    w_bar: float = 0.35             # formulation.md: w-bar, max weight in a single ETF
+    theta_g_bar: float = 0.60       # formulation.md: theta-bar^G_g, max region exposure
     theta_g_min: dict = field(default_factory=lambda: {
         "North America": 0.05, "Australia": 0.15, "Asia": 0.05,
         "Europe": 0.01, "South America": 0.005, "Other": 0.01,
-    })                               # readme.md: theta-underline^G_g, min exposure per
+    })                               # formulation.md: theta-underline^G_g, min exposure per
                                      # region; region names must match universe.py's
                                      # geo keys, and regions left out have no minimum
-    theta_s_bar: float = 0.45       # readme.md: theta-bar^S_s, max sector exposure
-    kappa_buy: float = 0.001        # readme.md: kappa^buy
-    kappa_sell: float = 0.001       # readme.md: kappa^sell
-    pe_lower: float = 0.0           # readme.md: PE-underline
-    pe_upper: float = 45.0          # readme.md: PE-overline
-    alpha: float = 0.95             # readme.md: alpha, CVaR confidence level
-    lambda_: float = 0.2            # readme.md: lambda, risk-aversion weight
-    c0: float = 100_000.0           # readme.md: C_0, starting cash (AUD)
-    gamma_au_annual: float = 0.012  # readme.md: gamma^AU, Australian equity franking
+    theta_s_bar: float = 0.45       # formulation.md: theta-bar^S_s, max sector exposure
+    kappa_buy: float = 0.001        # formulation.md: kappa^buy
+    kappa_sell: float = 0.001       # formulation.md: kappa^sell
+    pe_lower: float = 0.0           # formulation.md: PE-underline
+    pe_upper: float = 45.0          # formulation.md: PE-overline
+    alpha: float = 0.95             # formulation.md: alpha, CVaR confidence level
+    lambda_: float = 0.2            # formulation.md: lambda, risk-aversion weight
+    c0: float = 100_000.0           # formulation.md: C_0, starting cash (AUD)
+    gamma_au_annual: float = 0.012  # formulation.md: gamma^AU, Australian equity franking
                                      # credit yield (~4% dividend yield x ~70% franked
                                      # x 30/70 gross-up at the 30% company tax rate),
                                      # a benefit only an Australian resident taxpayer
@@ -44,8 +48,8 @@ class ModelConfig:
                                      # look-through weight
 
     # ------------------------------------------------------------------ #
-    # Run configuration (no readme.md symbol -- these fix the length and
-    # granularity of the review points t in readme.md's set T)
+    # Run configuration (no formulation.md symbol -- these fix the length and
+    # granularity of the review points t in formulation.md's set T)
     # ------------------------------------------------------------------ #
     months_per_period: int = 12     # review points every 12 months
     horizon_years: float = 10.0     # total investment horizon
@@ -96,20 +100,23 @@ class ModelConfig:
     explain_binding_tol: float = 1e-3      # slack (as a fraction of V) within which a constraint is binding
 
     # ------------------------------------------------------------------ #
-    # Solver-internal engineering parameters (no readme.md symbol)
+    # Solver-internal engineering parameters (no formulation.md symbol)
     # ------------------------------------------------------------------ #
     big_m_multiplier: float = 10.0        # M = big_m_multiplier * c0
     theta_upper_multiplier: float = 20.0  # loose a-priori cap on theta_t
     max_cuts_per_stage: int = 500         # FIFO safety valve only -- every dropped cut
                                           # loosens the deterministic bound, so keep
                                           # this well above what a run accumulates
-    cut_pi_tol: float = 3e-2
-    cut_q_tol: float = 200.0
-    relax_schedule: tuple = (0.0, 1.0, 10.0, 100.0, 1_000.0)
+    cut_pi_tol: float = 3e-2              # two cuts whose slopes (duals) all differ by less
+    cut_q_tol: float = 200.0              # than this, and intercepts by less than cut_q_tol
+                                          # (AUD), count as duplicates -- see _is_duplicate_cut
+    relax_schedule: tuple = (0.0, 1.0, 10.0, 100.0, 1_000.0)  # AUD slack added to every cut's
+                                          # RHS on successive retries when GLOP fails on a
+                                          # near-degenerate cut stack -- see solve_stage_robust
 
     @property
     def m(self) -> float:
-        """readme.md: M, the big-M constant."""
+        """formulation.md: M, the big-M constant."""
         return self.big_m_multiplier * self.c0
 
     @property
@@ -119,13 +126,13 @@ class ModelConfig:
 
     @property
     def horizon_periods(self) -> int:
-        """readme.md: T, the number of review points, given the horizon
+        """formulation.md: T, the number of review points, given the horizon
         and how many months each period spans."""
         return round(self.horizon_years * 12 / self.months_per_period)
 
     @property
     def gamma_au_per_period(self) -> float:
-        """readme.md: gamma^AU, scaled from an annual rate to whatever
+        """formulation.md: gamma^AU, scaled from an annual rate to whatever
         months_per_period is currently set to."""
         return self.gamma_au_annual * self.months_per_period / 12
 
